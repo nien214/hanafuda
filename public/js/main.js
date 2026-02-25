@@ -19,6 +19,7 @@ let deckRevealTimer    = null;
 let pendingLocalPlayCardId = null;
 let pendingLocalPlayFromRect = null;
 let pendingLocalPlayImageSrc = null;
+let pendingHandPlayAckTimer = null;
 let pendingChoiceCardId = null;
 let pendingChoiceImageSrc = null;
 let queuedFlyAnimations = [];
@@ -40,6 +41,60 @@ let statusLockUntil = 0;
 let statusUnlockTimer = null;
 let gameEndRevealArmedAt = 0;
 let eventToastTimer = null;
+let assetPreloadPromise = null;
+let assetLoadStats = { loaded: 0, total: 0, failed: 0 };
+
+const CARD_IMAGE_FILES = [
+  '01_Pine Chaff 1.png',
+  '01_Pine Chaff 2.png',
+  '01_Pine with Crane.png',
+  '01_Pine with Poetry Ribbon.png',
+  '02_Plum Blossoms Chaff 1.png',
+  '02_Plum Blossoms Chaff 2.png',
+  '02_Plum Blossoms with Bush Warbler.png',
+  '02_Plum Blossoms with Poetry Ribbon.png',
+  '03_Cherry Blossoms Chaff 1.png',
+  '03_Cherry Blossoms Chaff 2.png',
+  '03_Cherry Blossoms with Curtain.png',
+  '03_Cherry Blossoms with Poetry Ribbon.png',
+  '04_Wisteria Chaff 1.png',
+  '04_Wisteria Chaff 2.png',
+  '04_Wisteria with Cuckoo.png',
+  '04_Wisteria with Ribbon.png',
+  '05_Iris Chaff 1.png',
+  '05_Iris Chaff 2.png',
+  '05_Iris with Eight-Plank Bridge.png',
+  '05_Iris with Ribbon.png',
+  '06_Peony Chaff 1.png',
+  '06_Peony Chaff 2.png',
+  '06_Peony with Blue Ribbon.png',
+  '06_Peony with Butterflies.png',
+  '07_Bush Clover Chaff 1.png',
+  '07_Bush Clover Chaff 2.png',
+  '07_Bush Clover with Boar.png',
+  '07_Bush Clover with Ribbon.png',
+  '08_Susuki Grass Chaff 1.png',
+  '08_Susuki Grass Chaff 2.png',
+  '08_Susuki Grass with Geese.png',
+  '08_Susuki Grass with Moon.png',
+  '09_Chrysanthemum Chaff 1.png',
+  '09_Chrysanthemum Chaff 2.png',
+  '09_Chrysanthemum with Blue Ribbon.png',
+  '09_Chrysanthemum with Sake Cup.png',
+  '10_Maple Chaff 1.png',
+  '10_Maple Chaff 2.png',
+  '10_Maple with Blue Ribbon.png',
+  '10_Maple with Deer.png',
+  '11_Willow Chaff.png',
+  '11_Willow with Ono no Michikaze.png',
+  '11_Willow with Ribbon.png',
+  '11_Willow with Swallow.png',
+  '12_Paulownia Chaff 1.png',
+  '12_Paulownia Chaff 2.png',
+  '12_Paulownia Chaff 3.png',
+  '12_Paulownia with Phoenix.png',
+  'unfold.png',
+];
 
 /* ── DOM helpers ─────────────────────────────────────────────────────────────── */
 const $  = id => document.getElementById(id);
@@ -62,6 +117,97 @@ const showScreen = id => {
   // Hide deck reveal when leaving game screen
   if (id !== 'screen-game') hide('drawn-card-reveal');
 };
+
+function wait(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function updateAssetLoadingProgress(loaded, total, failed = 0) {
+  assetLoadStats = {
+    loaded: Math.max(0, loaded || 0),
+    total: Math.max(0, total || 0),
+    failed: Math.max(0, failed || 0),
+  };
+  const fill = $('asset-loading-fill');
+  const progress = $('asset-loading-progress');
+  const ratio = assetLoadStats.total > 0 ? (assetLoadStats.loaded / assetLoadStats.total) : 1;
+  if (fill) fill.style.width = `${Math.min(100, Math.max(0, ratio * 100))}%`;
+  if (progress) {
+    let text = `${t('loadingProgress')}: ${assetLoadStats.loaded}/${assetLoadStats.total}`;
+    if (assetLoadStats.failed > 0) text += ` (${assetLoadStats.failed} failed)`;
+    progress.textContent = text;
+  }
+}
+
+function refreshAssetLoadingI18n() {
+  if (!$('asset-loading')) return;
+  updateAssetLoadingProgress(assetLoadStats.loaded, assetLoadStats.total, assetLoadStats.failed);
+}
+
+window.refreshAssetLoadingI18n = refreshAssetLoadingI18n;
+
+function preloadImage(src, timeoutMs = 15000) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.decoding = 'async';
+    let settled = false;
+
+    const finish = (ok) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      img.onload = null;
+      img.onerror = null;
+      resolve(!!ok);
+    };
+
+    const timeout = setTimeout(() => finish(false), timeoutMs);
+    img.onload = () => {
+      if (typeof img.decode === 'function') {
+        img.decode().catch(() => {}).finally(() => finish(true));
+      } else {
+        finish(true);
+      }
+    };
+    img.onerror = () => finish(false);
+    img.src = src;
+  });
+}
+
+async function runAssetPreload() {
+  const overlay = $('asset-loading');
+  if (!overlay) return;
+
+  const minSplashMs = 400;
+  const startedAt = performance.now();
+  const imageUrls = CARD_IMAGE_FILES.map(file => `hanafuda_cards/${encodeURIComponent(file)}`);
+  updateAssetLoadingProgress(0, imageUrls.length, 0);
+
+  await Promise.all(imageUrls.map(async (url) => {
+    const ok = await preloadImage(url);
+    const loaded = assetLoadStats.loaded + 1;
+    const failed = assetLoadStats.failed + (ok ? 0 : 1);
+    updateAssetLoadingProgress(loaded, assetLoadStats.total, failed);
+  }));
+
+  const elapsed = performance.now() - startedAt;
+  if (elapsed < minSplashMs) await wait(minSplashMs - elapsed);
+
+  if (assetLoadStats.failed > 0) {
+    console.warn(`[asset-preload] ${assetLoadStats.failed} image(s) failed to preload.`);
+  }
+  overlay.classList.add('is-ready');
+  setTimeout(() => {
+    if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+  }, 380);
+}
+
+function ensureAssetPreloadStarted() {
+  if (!assetPreloadPromise) {
+    assetPreloadPromise = runAssetPreload();
+  }
+  return assetPreloadPromise;
+}
 
 /* ── Lobby bindings ──────────────────────────────────────────────────────────── */
 $('btn-solo').onclick = () => {
@@ -182,6 +328,7 @@ socket.on('players-ready', ({ p0Name, p1Name }) => {
 });
 
 socket.on('game-state', (state) => {
+  clearPendingHandPlayAck();
   queueStateAnimations(gameState, state);
   gameState = state;
   myIndex   = state.myIndex;
@@ -1413,6 +1560,10 @@ function onDeckPileClick() {
 
 /* ── Drag & Drop ─────────────────────────────────────────────────────────────── */
 function onDragStart(e, cardId) {
+  if (pendingLocalPlayCardId !== null) {
+    e.preventDefault();
+    return;
+  }
   draggedCardId = cardId;
   e.currentTarget.classList.add('dragging');
   e.dataTransfer.effectAllowed = 'move';
@@ -1440,6 +1591,7 @@ function onDragEnd(e) {
 
 function onDropOnCard(fieldCardId) {
   if (draggedCardId === null) return;
+  if (pendingLocalPlayCardId !== null) return;
   clearHighlights();
   const id = draggedCardId;
   draggedCardId = null;
@@ -1448,6 +1600,7 @@ function onDropOnCard(fieldCardId) {
 
 function onDropToField(e) {
   if (draggedCardId === null) return;
+  if (pendingLocalPlayCardId !== null) return;
   clearHighlights();
   const id = draggedCardId;
   draggedCardId = null;
@@ -1463,10 +1616,12 @@ function clearHighlights() {
 function onHandCardClick(cardId) {
   if (!gameState) return;
   if (gameState.currentPlayer !== myIndex || gameState.phase !== 'hand-play') return;
+  if (pendingLocalPlayCardId !== null) return;
   animateHandPlay(cardId, () => socket.emit('play-card', { cardId }));
 }
 
 function animateHandPlay(cardId, cb, targetFieldCardId = null) {
+  if (pendingLocalPlayCardId !== null) return;
   const el = document.querySelector(`#player-hand .card[data-card-id="${cardId}"]`);
   if (el) {
     const img = el.querySelector('img');
@@ -1475,12 +1630,35 @@ function animateHandPlay(cardId, cb, targetFieldCardId = null) {
     pendingLocalPlayImageSrc = img ? img.src : 'hanafuda_cards/unfold.png';
     pendingLocalPlayCardId = cardId;
     el.style.visibility = 'hidden';
+    startPendingHandPlayAck();
     cb(); // emit immediately so the fly starts as soon as the server responds
   } else {
     pendingLocalPlayCardId = null;
     pendingLocalPlayFromRect = null;
     pendingLocalPlayImageSrc = null;
+    clearPendingHandPlayAck();
     cb();
+  }
+}
+
+function startPendingHandPlayAck() {
+  clearPendingHandPlayAck();
+  // Recovery: if server ack/state is delayed or dropped, restore hidden cards.
+  pendingHandPlayAckTimer = setTimeout(() => {
+    pendingHandPlayAckTimer = null;
+    pendingLocalPlayCardId = null;
+    pendingLocalPlayFromRect = null;
+    pendingLocalPlayImageSrc = null;
+    document.querySelectorAll('#player-hand .card').forEach(el => {
+      el.style.visibility = '';
+    });
+  }, 3000);
+}
+
+function clearPendingHandPlayAck() {
+  if (pendingHandPlayAckTimer) {
+    clearTimeout(pendingHandPlayAckTimer);
+    pendingHandPlayAckTimer = null;
   }
 }
 
@@ -1685,3 +1863,4 @@ function showDeckReveal(card) {
 /* ── Init ────────────────────────────────────────────────────────────────────── */
 applyTranslations();
 updateRulesContent();
+ensureAssetPreloadStarted();
