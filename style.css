@@ -1154,3 +1154,21 @@ html, body {
   text-overflow: ellipsis;
   font-size: 14px;
 }
+
+/* Fallback for mobile Safari viewport quirks: keep hand rows compact even if
+   the mobile-portrait class update lags during browser chrome resize. */
+@media (max-width: 900px) and (orientation: portrait) {
+  #screen-game #player-hand,
+  #screen-game #opp-hand {
+    flex-wrap: nowrap;
+    justify-content: center;
+    gap: clamp(1px, 0.35vw, 3px);
+    width: 100%;
+  }
+  #screen-game #player-hand .card,
+  #screen-game #opp-hand .card,
+  #screen-game #opp-hand .card.opp-back {
+    width: clamp(34px, calc((100vw - 44px) / 8), 50px);
+    height: calc(clamp(34px, calc((100vw - 44px) / 8), 50px) * 1.39);
+  }
+}

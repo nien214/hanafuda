@@ -126,7 +126,9 @@ const showScreen = id => {
 };
 
 function isMobilePortraitViewport() {
-  return window.matchMedia('(max-width: 900px) and (orientation: portrait)').matches;
+  const vw = Math.min(window.innerWidth || 0, document.documentElement.clientWidth || Infinity);
+  const vh = Math.min(window.innerHeight || 0, document.documentElement.clientHeight || Infinity);
+  return vw <= 900 && vh >= vw;
 }
 
 function syncMobilePortraitLayout() {
