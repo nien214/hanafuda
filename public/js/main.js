@@ -1080,11 +1080,17 @@ function queueStateAnimations(prev, next) {
     return (carry && carry.hideAt > Date.now()) ? id : null;
   });
   addedFieldCards.forEach(c => {
-    // Prefer a truly empty slot; fall back to a just-captured slot (carry in progress)
-    // so the new card lands in rows 1-2 rather than being appended to row 3+.
+    // Prefer a truly empty slot; fall back to any slot whose card is departing (either
+    // removed in this update via removedById, or still carrying from a prior update).
+    // This ensures new cards fill rows 1-2 rather than being appended to row 3+.
     let emptyIdx = fieldSlots.findIndex(v => v === null);
     if (emptyIdx === -1) {
-      emptyIdx = fieldSlots.findIndex(id => id !== null && removedById.has(id));
+      emptyIdx = fieldSlots.findIndex(id => {
+        if (id === null) return false;
+        if (removedById.has(id)) return true;
+        const carry = pendingFieldCarryAt.get(id);
+        return !!(carry && carry.hideAt > Date.now());
+      });
     }
     if (emptyIdx !== -1) {
       fieldSlots[emptyIdx] = c.id;  // reuse the freed slot
