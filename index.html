@@ -8,6 +8,20 @@
 </head>
 <body>
 
+<!-- ── Asset Loading Overlay ───────────────────────────────────────────────── -->
+<div id="asset-loading" class="asset-loading">
+  <div class="asset-loading-box">
+    <h1 class="asset-loading-title" data-i18n="loadingTitle">Preparing cards…</h1>
+    <p class="asset-loading-subtitle" data-i18n="loadingSubtitle">
+      Pre-caching card images for a smooth game start.
+    </p>
+    <div class="asset-loading-bar">
+      <div id="asset-loading-fill" class="asset-loading-fill"></div>
+    </div>
+    <p id="asset-loading-progress" class="asset-loading-progress">0 / 49</p>
+  </div>
+</div>
+
 <!-- ── Language Switch ──────────────────────────────────────────────────────── -->
 <div id="lang-switch">
   <button id="btn-en" class="lang-btn active" onclick="setLang('en')">🇬🇧 English</button>

@@ -2,6 +2,9 @@
 window.I18N = {
   en: {
     titleSub:        'Hanafuda · Koi-Koi',
+    loadingTitle:    'Preparing cards…',
+    loadingSubtitle: 'Pre-caching card images for a smooth game start.',
+    loadingProgress: 'Cards loaded',
     createGame:      'Create Game',
     joinGame:        'Join Game',
     gameRules:       'Game Rules',
@@ -132,6 +135,9 @@ window.I18N = {
 
   jp: {
     titleSub:        '花札・こいこい',
+    loadingTitle:    'カードを準備中…',
+    loadingSubtitle: '開始時の読み込みを滑らかにするため、画像を先に読み込んでいます。',
+    loadingProgress: 'カード読み込み',
     createGame:      'ゲームを作成',
     joinGame:        'ゲームに参加',
     gameRules:       'ゲームのルール',
@@ -266,6 +272,9 @@ function setLang(lang) {
   document.getElementById('btn-jp').classList.toggle('active', lang === 'jp');
   applyTranslations();
   updateRulesContent();
+  if (typeof window.refreshAssetLoadingI18n === 'function') {
+    window.refreshAssetLoadingI18n();
+  }
   if (window.gameState) renderAll();
 }
 
