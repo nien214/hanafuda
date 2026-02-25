@@ -563,6 +563,7 @@ function renderField(s, capturedIds = new Set()) {
   fieldSlots = fieldSlots.map(slotId => {
     if (slotId === null) return null;
     if (newFieldIds.has(slotId)) return slotId;
+    if (pendingChoiceOnField && slotId === pendingChoiceOnField.id) return slotId;
     const carry = pendingFieldCarryAt.get(slotId);
     return (carry && carry.hideAt > now) ? slotId : null;
   });
