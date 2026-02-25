@@ -22,6 +22,7 @@ let pendingLocalPlayImageSrc = null;
 let pendingHandPlayAckTimer = null;
 let pendingChoiceCardId = null;
 let pendingChoiceImageSrc = null;
+let pendingChoiceOnField = null;  // { id, imageSrc } — played card shown on field during capture-choice
 let queuedFlyAnimations = [];
 let pendingDeckDrawCard = null;
 let pendingFieldRevealAt = new Map();
@@ -544,7 +545,13 @@ function renderField(s, capturedIds = new Set()) {
   for (const [id, carry] of pendingFieldCarryAt.entries()) {
     if (!carry || carry.hideAt <= now) pendingFieldCarryAt.delete(id);
   }
-  el.innerHTML = '';
+  // Collect existing card elements (non-placeholder) by id before any DOM changes
+  const existingFieldEls = new Map();
+  [...el.children].forEach(child => {
+    const id = child.dataset.cardId;
+    if (id) existingFieldEls.set(id, child);
+  });
+
   fieldCardLastRects = new Map();
 
   // Initialize slots on first render of a round (queueStateAnimations returned early for first state)
@@ -560,38 +567,67 @@ function renderField(s, capturedIds = new Set()) {
     return (carry && carry.hideAt > now) ? slotId : null;
   });
 
+  // Build desired children list, reusing existing elements where possible
+  const desiredChildren = [];
+  const wantedIds = new Set();
+
   fieldSlots.forEach((slotId) => {
     if (slotId === null) {
       // Invisible placeholder — preserves the grid cell so other cards don't shift
       const ph = document.createElement('div');
       ph.className = 'card field-card field-placeholder';
-      el.appendChild(ph);
+      desiredChildren.push(ph);
       return;
     }
     const card = cardMap.get(slotId);
     if (!card) {
       const carry = pendingFieldCarryAt.get(slotId);
       if (carry && carry.hideAt > now) {
-        const div = document.createElement('div');
-        div.className = 'card field-card';
-        div.dataset.cardId = slotId;
-        const img = document.createElement('img');
-        img.src = carry.imageSrc;
-        img.alt = '';
-        div.appendChild(img);
-        el.appendChild(div);
-        fieldCardLastRects.set(slotId, div.getBoundingClientRect());
+        let div = existingFieldEls.get(slotId);
+        if (!div) {
+          div = document.createElement('div');
+          div.className = 'card field-card';
+          div.dataset.cardId = slotId;
+          const img = document.createElement('img');
+          img.src = carry.imageSrc;
+          img.alt = '';
+          div.appendChild(img);
+        }
+        wantedIds.add(slotId);
+        desiredChildren.push(div);
+      } else if (pendingChoiceOnField && pendingChoiceOnField.id === slotId) {
+        // Played card waiting for capture-choice — show it on the field (hidden until fly lands).
+        let div = existingFieldEls.get(slotId);
+        if (!div) {
+          div = document.createElement('div');
+          div.className = 'card field-card';
+          div.dataset.cardId = slotId;
+          const img = document.createElement('img');
+          img.src = pendingChoiceOnField.imageSrc;
+          img.alt = '';
+          div.appendChild(img);
+        } else {
+          div.className = 'card field-card';
+        }
+        if (isFieldCardPendingReveal(slotId)) div.classList.add('pending-field-hidden');
+        wantedIds.add(slotId);
+        desiredChildren.push(div);
       } else {
         const ph = document.createElement('div');
         ph.className = 'card field-card field-placeholder';
-        el.appendChild(ph);
+        desiredChildren.push(ph);
       }
       return;
     }
 
-    const div = makeCard(card, false, false);
-    div.classList.add('field-card');
-    div.dataset.cardId = card.id;
+    let div = existingFieldEls.get(card.id);
+    if (!div) {
+      div = makeCard(card, false, false);
+      div.classList.add('field-card');
+      div.dataset.cardId = card.id;
+    } else {
+      div.className = 'card field-card';
+    }
     // Animate cards that just arrived on the field (but not ones hidden pending fly reveal)
     if (!lastFieldIds.has(card.id)) div.classList.add('field-enter');
     if (isFieldCardPendingReveal(card.id)) {
@@ -619,8 +655,25 @@ function renderField(s, capturedIds = new Set()) {
       e.preventDefault();
       onFieldCardClick(card.id);
     };
-    el.appendChild(div);
-    fieldCardLastRects.set(card.id, div.getBoundingClientRect());
+    wantedIds.add(card.id);
+    desiredChildren.push(div);
+  });
+
+  // Remove elements no longer wanted
+  existingFieldEls.forEach((child, id) => {
+    if (!wantedIds.has(id)) child.remove();
+  });
+
+  // Reconcile DOM order without full clear
+  desiredChildren.forEach((child, i) => {
+    if (el.children[i] !== child) el.insertBefore(child, el.children[i] || null);
+  });
+  while (el.children.length > desiredChildren.length) el.lastElementChild.remove();
+
+  // Record rects after DOM is stable
+  desiredChildren.forEach(child => {
+    const id = child.dataset.cardId;
+    if (id) fieldCardLastRects.set(id, child.getBoundingClientRect());
   });
 
   lastFieldIds = newFieldIds;
@@ -691,31 +744,55 @@ function scheduleFieldCarryFlush() {
 /* ── My Hand ─────────────────────────────────────────────────────────────────── */
 function renderMyHand(s, capturedIds = new Set()) {
   const el = $('player-hand');
-  el.innerHTML = '';
   const isMyTurn = s.currentPlayer === myIndex && s.phase === 'hand-play';
   const safeHand = s.myHand.filter(c => !capturedIds.has(c.id));
   const newHandIds = new Set(safeHand.map(c => c.id));
 
-  safeHand.forEach(card => {
+  // Collect existing card elements by id
+  const existingHandEls = new Map();
+  [...el.children].forEach(child => {
+    const id = child.dataset.cardId;
+    if (id) existingHandEls.set(id, child);
+  });
+
+  // Remove cards no longer in hand
+  existingHandEls.forEach((child, id) => {
+    if (!newHandIds.has(id)) child.remove();
+  });
+
+  // Add/update/reorder cards
+  safeHand.forEach((card, i) => {
     const isNew = !lastHandIds.has(card.id);
-    const div = makeCard(card, isMyTurn, isNew);
+    let div = existingHandEls.get(card.id);
+    if (!div) {
+      div = makeCard(card, isMyTurn, isNew);
+    } else if (isNew) {
+      div.classList.add('animate-in');
+    }
     if (isMyTurn) {
       div.draggable = true;
       div.classList.add('draggable');
       div.ondragstart = e => onDragStart(e, card.id);
       div.ondragend   = e => onDragEnd(e);
       div.onclick     = () => onHandCardClick(card.id);
+    } else {
+      div.draggable = false;
+      div.classList.remove('draggable');
+      div.ondragstart = null;
+      div.ondragend   = null;
+      div.onclick     = null;
     }
-    el.appendChild(div);
+    if (el.children[i] !== div) el.insertBefore(div, el.children[i] || null);
   });
+
   lastHandIds = newHandIds;
 }
 
 /* ── Opponent Hand ───────────────────────────────────────────────────────────── */
 function renderOppHand(s) {
   const el = $('opp-hand');
-  el.innerHTML = '';
-  for (let i = 0; i < s.oppHandCount; i++) {
+  // Add missing back-cards
+  while (el.children.length < s.oppHandCount) {
     const div = document.createElement('div');
     div.className = 'card opp-back';
     const img = document.createElement('img');
@@ -724,6 +801,8 @@ function renderOppHand(s) {
     div.appendChild(img);
     el.appendChild(div);
   }
+  // Remove excess back-cards
+  while (el.children.length > s.oppHandCount) el.lastElementChild.remove();
 }
 
 /* ── Deck Pile ───────────────────────────────────────────────────────────────── */
@@ -781,28 +860,62 @@ function renderCaptures(s) {
 function renderTypeRow(elId, cards, prevIds, seenGlobal = new Set()) {
   const el = $(elId);
   if (!el) return;
-  el.innerHTML = '';
+
+  // Collect existing elements by card id
+  const existingCapEls = new Map();
+  [...el.children].forEach(child => {
+    const id = child.dataset.cardId;
+    if (id) existingCapEls.set(id, child);
+  });
+
+  // Deduplicate and build desired list
   const seenLocal = new Set();
+  const desiredCards = [];
   cards.forEach(card => {
     if (seenLocal.has(card.id) || seenGlobal.has(card.id)) return;
     seenLocal.add(card.id);
     seenGlobal.add(card.id);
-    const div = document.createElement('div');
-    div.className = 'cap-card';
-    div.dataset.cardId = card.id;
-    const capPending = isCaptureCardPendingReveal(card.id);
-    if (capPending) {
-      div.classList.add('pending-cap-hidden');
-    } else if (prevIds && !prevIds.has(card.id)) {
-      div.classList.add('cap-enter');  // only animate when card actually becomes visible
-    }
-    const img = document.createElement('img');
-    img.src = `hanafuda_cards/${encodeURIComponent(card.file)}`;
-    img.alt = card.nameEn;
-    img.title = currentLang === 'jp' ? card.nameJp : card.nameEn;
-    div.appendChild(img);
-    el.appendChild(div);
+    desiredCards.push(card);
   });
+
+  const wantedIds = new Set(desiredCards.map(c => c.id));
+
+  // Remove elements no longer wanted
+  existingCapEls.forEach((child, id) => {
+    if (!wantedIds.has(id)) child.remove();
+  });
+
+  // Add/update/reorder
+  desiredCards.forEach((card, i) => {
+    let div = existingCapEls.get(card.id);
+    const capPending = isCaptureCardPendingReveal(card.id);
+    if (!div) {
+      div = document.createElement('div');
+      div.className = 'cap-card';
+      div.dataset.cardId = card.id;
+      if (capPending) {
+        div.classList.add('pending-cap-hidden');
+      } else if (prevIds && !prevIds.has(card.id)) {
+        div.classList.add('cap-enter');  // only animate when card actually becomes visible
+      }
+      const img = document.createElement('img');
+      img.src = `hanafuda_cards/${encodeURIComponent(card.file)}`;
+      img.alt = card.nameEn;
+      img.title = currentLang === 'jp' ? card.nameJp : card.nameEn;
+      div.appendChild(img);
+    } else {
+      // Update pending-cap-hidden state for existing elements
+      if (capPending) {
+        div.classList.add('pending-cap-hidden');
+      } else {
+        div.classList.remove('pending-cap-hidden');
+      }
+    }
+    if (el.children[i] !== div) el.insertBefore(div, el.children[i] || null);
+  });
+
+  // Remove excess children
+  while (el.children.length > desiredCards.length) el.lastElementChild.remove();
 }
 
 function isCaptureCardPendingReveal(cardId) {
@@ -866,6 +979,7 @@ function queueStateAnimations(prev, next) {
     pendingLocalPlayImageSrc = null;
     pendingChoiceCardId = null;
     pendingChoiceImageSrc = null;
+    pendingChoiceOnField = null;
     queuedFlyAnimations = [];
     pendingFieldRevealAt.clear();
     pendingFieldCarryAt.clear();
@@ -960,11 +1074,18 @@ function queueStateAnimations(prev, next) {
     // Keep removed card ids in their slots for this update so carry rendering can
     // hold them visible until stack travel begins (no disappear/blink).
     if (removedById.has(id)) return id;
+    // Preserve the pending choice card's slot until it is resolved.
+    if (pendingChoiceOnField && id === pendingChoiceOnField.id) return id;
     const carry = pendingFieldCarryAt.get(id);
     return (carry && carry.hideAt > Date.now()) ? id : null;
   });
   addedFieldCards.forEach(c => {
-    const emptyIdx = fieldSlots.findIndex(v => v === null);
+    // Prefer a truly empty slot; fall back to a just-captured slot (carry in progress)
+    // so the new card lands in rows 1-2 rather than being appended to row 3+.
+    let emptyIdx = fieldSlots.findIndex(v => v === null);
+    if (emptyIdx === -1) {
+      emptyIdx = fieldSlots.findIndex(id => id !== null && removedById.has(id));
+    }
     if (emptyIdx !== -1) {
       fieldSlots[emptyIdx] = c.id;  // reuse the freed slot
     } else {
@@ -1011,21 +1132,38 @@ function queueStateAnimations(prev, next) {
         });
         timelineMs += CAPTURE_SEQUENCE_MS + CAPTURE_SETTLE_MS;
       } else {
-        const myPlayedLandedId = addedFieldCardIds.has(removed.id) ? removed.id : preferredTargetId;
-        if (addedFieldCardIds.has(myPlayedLandedId)) scheduleFieldReveal(myPlayedLandedId, timelineMs, 1300);
-        queueFlyFromSource(null, {
-          fromRect: pendingLocalPlayFromRect,
-          imageSrc: pendingLocalPlayImageSrc || `hanafuda_cards/${encodeURIComponent(removed.file)}`,
-          targetCardId: myPlayedLandedId,
-          revealFieldCardId: addedFieldCardIds.has(myPlayedLandedId) ? myPlayedLandedId : null,
-          delayBaseMs: timelineMs,
-          durationMs: 1300
-        });
-        timelineMs += FLY_TO_FIELD_MS;
+        const choiceImageSrc = pendingLocalPlayImageSrc || `hanafuda_cards/${encodeURIComponent(removed.file)}`;
         if (next.phase === 'capture-choice') {
+          // Assign the played card a field slot so it stays visible while the player chooses.
+          let choiceSlotIdx = fieldSlots.findIndex(v => v === null);
+          if (choiceSlotIdx === -1) choiceSlotIdx = fieldSlots.findIndex(id => id !== null && removedById.has(id));
+          if (choiceSlotIdx !== -1) fieldSlots[choiceSlotIdx] = removed.id;
+          else fieldSlots.push(removed.id);
           pendingChoiceCardId = removed.id;
-          pendingChoiceImageSrc = pendingLocalPlayImageSrc || `hanafuda_cards/${encodeURIComponent(removed.file)}`;
+          pendingChoiceImageSrc = choiceImageSrc;
+          pendingChoiceOnField = { id: removed.id, imageSrc: choiceImageSrc };
+          scheduleFieldReveal(removed.id, timelineMs, 1300);
+          queueFlyFromSource(null, {
+            fromRect: pendingLocalPlayFromRect,
+            imageSrc: choiceImageSrc,
+            targetCardId: removed.id,
+            revealFieldCardId: removed.id,
+            delayBaseMs: timelineMs,
+            durationMs: 1300
+          });
+        } else {
+          const myPlayedLandedId = addedFieldCardIds.has(removed.id) ? removed.id : preferredTargetId;
+          if (addedFieldCardIds.has(myPlayedLandedId)) scheduleFieldReveal(myPlayedLandedId, timelineMs, 1300);
+          queueFlyFromSource(null, {
+            fromRect: pendingLocalPlayFromRect,
+            imageSrc: choiceImageSrc,
+            targetCardId: myPlayedLandedId,
+            revealFieldCardId: addedFieldCardIds.has(myPlayedLandedId) ? myPlayedLandedId : null,
+            delayBaseMs: timelineMs,
+            durationMs: 1300
+          });
         }
+        timelineMs += FLY_TO_FIELD_MS;
       }
       pendingLocalPlayFromRect = null;
       pendingLocalPlayImageSrc = null;
@@ -1067,6 +1205,17 @@ function queueStateAnimations(prev, next) {
 
   // Resolve "capture-choice" hand card capture before any deck-draw animation.
   if (prev.phase === 'capture-choice' && pendingChoiceCardId !== null) {
+    // Grab the field element now (before renderAll clears it) to use as animation source.
+    const choiceFieldEl = pendingChoiceOnField
+      ? document.querySelector(`#field .card[data-card-id="${pendingChoiceOnField.id}"]`)
+      : null;
+    // Free the pending-choice field slot so renderField shows it as empty after this update.
+    if (pendingChoiceOnField) {
+      const choiceId = pendingChoiceOnField.id;
+      fieldSlots = fieldSlots.map(id => id === choiceId ? null : id);
+      pendingChoiceOnField = null;
+    }
+
     const capturedByMe = nextMyCaptureIds.has(pendingChoiceCardId);
     const capturedByOpp = nextOppCaptureIds.has(pendingChoiceCardId);
     const capturePool = capturedByMe ? newMyCapturedCards : (capturedByOpp ? newOppCapturedCards : []);
@@ -1081,6 +1230,7 @@ function queueStateAnimations(prev, next) {
       const fcp = fieldCardProps(fcs[0] || null, fcs);
       const captureCards = [playedCard, ...fcs];
       queueCaptureSequence({
+        sourceEl: choiceFieldEl,
         sourceRectFallbackSelector: '#field',
         imageSrc: pendingChoiceImageSrc || `hanafuda_cards/${encodeURIComponent(playedCard.file)}`,
         capturedCardId: playedCard.id,
