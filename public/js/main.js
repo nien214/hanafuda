@@ -115,6 +115,7 @@ const showScreen = id => {
   // Language switch: only visible on lobby
   const ls = $('lang-switch');
   if (ls) ls.style.display = (id === 'screen-lobby') ? '' : 'none';
+  syncMobilePortraitLayout();
   // Hide deck reveal when leaving game screen
   if (id !== 'screen-game') hide('drawn-card-reveal');
   if (id === 'screen-game') {
@@ -124,8 +125,25 @@ const showScreen = id => {
   }
 };
 
-function isMobilePortraitGameLayout() {
+function isMobilePortraitViewport() {
   return window.matchMedia('(max-width: 900px) and (orientation: portrait)').matches;
+}
+
+function syncMobilePortraitLayout() {
+  const screen = $('screen-game');
+  if (!screen) return;
+  const isPortrait = isMobilePortraitViewport();
+  screen.classList.toggle('mobile-portrait', isPortrait);
+  if (!isPortrait) {
+    mobileStageCentered = false;
+    const stage = $('game-stage-scroll');
+    if (stage) stage.scrollLeft = 0;
+  }
+}
+
+function isMobilePortraitGameLayout() {
+  const screen = $('screen-game');
+  return !!screen && screen.classList.contains('mobile-portrait');
 }
 
 function centerMobileGameStage(force = false) {
@@ -1882,8 +1900,10 @@ function showDeckReveal(card) {
 applyTranslations();
 updateRulesContent();
 ensureAssetPreloadStarted();
+syncMobilePortraitLayout();
 
 window.addEventListener('resize', () => {
+  syncMobilePortraitLayout();
   if (!isMobilePortraitGameLayout()) {
     mobileStageCentered = false;
     return;
