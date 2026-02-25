@@ -1,5 +1,9 @@
 /* ── Socket & State ───────────────────────────────────────────────────────────── */
-const socket = io();
+const RENDER_SOCKET_URL = 'https://hanafuda-kz9x.onrender.com';
+const isLocalHost = /^(localhost|127\.0\.0\.1)$/.test(window.location.hostname);
+const socket = isLocalHost
+  ? io()
+  : io(RENDER_SOCKET_URL, { transports: ['websocket', 'polling'] });
 let gameState   = null;
 let myIndex     = null;   // 0 or 1
 let playerNames = { 0: 'Player 1', 1: 'Player 2' };
@@ -516,7 +520,7 @@ function renderOppHand(s) {
     const div = document.createElement('div');
     div.className = 'card opp-back';
     const img = document.createElement('img');
-    img.src = '/hanafuda_cards/unfold.png';
+    img.src = 'hanafuda_cards/unfold.png';
     img.alt = 'card back';
     div.appendChild(img);
     el.appendChild(div);
@@ -594,7 +598,7 @@ function renderTypeRow(elId, cards, prevIds, seenGlobal = new Set()) {
       div.classList.add('cap-enter');  // only animate when card actually becomes visible
     }
     const img = document.createElement('img');
-    img.src = `/hanafuda_cards/${encodeURIComponent(card.file)}`;
+    img.src = `hanafuda_cards/${encodeURIComponent(card.file)}`;
     img.alt = card.nameEn;
     img.title = currentLang === 'jp' ? card.nameJp : card.nameEn;
     div.appendChild(img);
@@ -647,7 +651,7 @@ function makeCard(card, interactive, animateIn = false) {
   div.className = animateIn ? 'card animate-in' : 'card';
   div.dataset.cardId = card.id;
   const img = document.createElement('img');
-  img.src = `/hanafuda_cards/${encodeURIComponent(card.file)}`;
+  img.src = `hanafuda_cards/${encodeURIComponent(card.file)}`;
   img.alt = currentLang === 'jp' ? card.nameJp : card.nameEn;
   img.title = (currentLang === 'jp' ? card.nameJp : card.nameEn) + ` (${t('months')[card.month - 1]})`;
   div.appendChild(img);
@@ -728,8 +732,8 @@ function queueStateAnimations(prev, next) {
     return {
       touchFieldCardId: card != null ? card.id : null,
       touchFieldCardIds: cards.map(c => c.id),
-      touchFieldCardImageSrc: card ? `/hanafuda_cards/${encodeURIComponent(card.file)}` : null,
-      touchFieldCardImageSrcs: cards.map(c => `/hanafuda_cards/${encodeURIComponent(c.file)}`),
+      touchFieldCardImageSrc: card ? `hanafuda_cards/${encodeURIComponent(card.file)}` : null,
+      touchFieldCardImageSrcs: cards.map(c => `hanafuda_cards/${encodeURIComponent(c.file)}`),
       touchRect: card ? (fieldCardLastRects.get(card.id) || null) : null,
     };
   }
@@ -799,7 +803,7 @@ function queueStateAnimations(prev, next) {
         queueCaptureSequence({
           sourceRect: pendingLocalPlayFromRect,
           sourceRectFallbackSelector: '#field',
-          imageSrc: pendingLocalPlayImageSrc || `/hanafuda_cards/${encodeURIComponent(removed.file)}`,
+          imageSrc: pendingLocalPlayImageSrc || `hanafuda_cards/${encodeURIComponent(removed.file)}`,
           capturedCardId: removed.id,
           captureCards,
           revealCardIds: sequenceRevealIds(captureCards, newMyCapturedCards, removed.id),
@@ -812,7 +816,7 @@ function queueStateAnimations(prev, next) {
         if (addedFieldCardIds.has(myPlayedLandedId)) scheduleFieldReveal(myPlayedLandedId, timelineMs, 1300);
         queueFlyFromSource(null, {
           fromRect: pendingLocalPlayFromRect,
-          imageSrc: pendingLocalPlayImageSrc || `/hanafuda_cards/${encodeURIComponent(removed.file)}`,
+          imageSrc: pendingLocalPlayImageSrc || `hanafuda_cards/${encodeURIComponent(removed.file)}`,
           targetCardId: myPlayedLandedId,
           revealFieldCardId: addedFieldCardIds.has(myPlayedLandedId) ? myPlayedLandedId : null,
           delayBaseMs: timelineMs,
@@ -821,7 +825,7 @@ function queueStateAnimations(prev, next) {
         timelineMs += FLY_TO_FIELD_MS;
         if (next.phase === 'capture-choice') {
           pendingChoiceCardId = removed.id;
-          pendingChoiceImageSrc = pendingLocalPlayImageSrc || `/hanafuda_cards/${encodeURIComponent(removed.file)}`;
+          pendingChoiceImageSrc = pendingLocalPlayImageSrc || `hanafuda_cards/${encodeURIComponent(removed.file)}`;
         }
       }
       pendingLocalPlayFromRect = null;
@@ -835,7 +839,7 @@ function queueStateAnimations(prev, next) {
         const captureCards = [removed, ...fcs];
         queueCaptureSequence({
           sourceEl: srcEl,
-          imageSrc: `/hanafuda_cards/${encodeURIComponent(removed.file)}`,
+          imageSrc: `hanafuda_cards/${encodeURIComponent(removed.file)}`,
           capturedCardId: removed.id,
           captureCards,
           revealCardIds: sequenceRevealIds(captureCards, newMyCapturedCards, removed.id),
@@ -847,7 +851,7 @@ function queueStateAnimations(prev, next) {
         const myPlayedLandedId = addedFieldCardIds.has(removed.id) ? removed.id : preferredTargetId;
         if (addedFieldCardIds.has(myPlayedLandedId)) scheduleFieldReveal(myPlayedLandedId, timelineMs, 1300);
         queueFlyFromSource(srcEl, {
-          imageSrc: `/hanafuda_cards/${encodeURIComponent(removed.file)}`,
+          imageSrc: `hanafuda_cards/${encodeURIComponent(removed.file)}`,
           targetCardId: myPlayedLandedId,
           revealFieldCardId: addedFieldCardIds.has(myPlayedLandedId) ? myPlayedLandedId : null,
           delayBaseMs: timelineMs,
@@ -879,7 +883,7 @@ function queueStateAnimations(prev, next) {
       const captureCards = [playedCard, ...fcs];
       queueCaptureSequence({
         sourceRectFallbackSelector: '#field',
-        imageSrc: pendingChoiceImageSrc || `/hanafuda_cards/${encodeURIComponent(playedCard.file)}`,
+        imageSrc: pendingChoiceImageSrc || `hanafuda_cards/${encodeURIComponent(playedCard.file)}`,
         capturedCardId: playedCard.id,
         captureCards,
         revealCardIds: sequenceRevealIds(captureCards, capturePool, playedCard.id),
@@ -904,10 +908,10 @@ function queueStateAnimations(prev, next) {
       const fcp = fieldCardProps(fcs[0] || null, fcs);
       // Reveal opponent's card face-up from the moment it leaves their hand
       const oppFaceImg = oppPlayedCard
-        ? `/hanafuda_cards/${encodeURIComponent(oppPlayedCard.file)}`
+        ? `hanafuda_cards/${encodeURIComponent(oppPlayedCard.file)}`
         : (newOppCapturedCards[0]
-          ? `/hanafuda_cards/${encodeURIComponent(newOppCapturedCards[0].file)}`
-          : '/hanafuda_cards/unfold.png');
+          ? `hanafuda_cards/${encodeURIComponent(newOppCapturedCards[0].file)}`
+          : 'hanafuda_cards/unfold.png');
       const captureCards = [
         ...(oppPlayedCard ? [oppPlayedCard] : []),
         ...fcs
@@ -931,10 +935,10 @@ function queueStateAnimations(prev, next) {
       if (addedFieldCardIds.has(oppFieldTargetId)) scheduleFieldReveal(oppFieldTargetId, timelineMs, 1120);
       // Reveal opponent's card face-up from the moment it leaves their hand
       const oppFaceImg = oppFieldCard
-        ? `/hanafuda_cards/${encodeURIComponent(oppFieldCard.file)}`
+        ? `hanafuda_cards/${encodeURIComponent(oppFieldCard.file)}`
         : (addedFieldCards[0]
-          ? `/hanafuda_cards/${encodeURIComponent(addedFieldCards[0].file)}`
-          : '/hanafuda_cards/unfold.png');
+          ? `hanafuda_cards/${encodeURIComponent(addedFieldCards[0].file)}`
+          : 'hanafuda_cards/unfold.png');
       queueFlyFromSource(srcEl, {
         imageSrc: oppFaceImg,
         targetCardId: oppFieldTargetId,
@@ -952,12 +956,12 @@ function queueStateAnimations(prev, next) {
     const drawnCapturedOpp = drawnCardId !== null && nextOppCaptureIds.has(drawnCardId);
     const srcEl = document.querySelector('.deck-layer-1');
     const drawnImage = pendingDeckDrawCard
-      ? `/hanafuda_cards/${encodeURIComponent(pendingDeckDrawCard.file)}`
-      : '/hanafuda_cards/unfold.png';
+      ? `hanafuda_cards/${encodeURIComponent(pendingDeckDrawCard.file)}`
+      : 'hanafuda_cards/unfold.png';
     if (drawnLandedOnField) {
       if (drawnCardId) scheduleFieldReveal(drawnCardId, timelineMs, 1250);
       queueFlyFromSource(srcEl, {
-        imageSrc: '/hanafuda_cards/unfold.png',
+        imageSrc: 'hanafuda_cards/unfold.png',
         frontImageSrc: drawnImage,
         targetCardId: drawnCardId,
         targetSelector: '#field',
@@ -979,7 +983,7 @@ function queueStateAnimations(prev, next) {
       ];
       queueCaptureSequence({
         sourceEl: srcEl,
-        imageSrc: '/hanafuda_cards/unfold.png',
+        imageSrc: 'hanafuda_cards/unfold.png',
         frontImageSrc: drawnImage,
         flipOnFirstLeg: true,
         capturedCardId: drawnCardId,
@@ -992,7 +996,7 @@ function queueStateAnimations(prev, next) {
     } else {
       if (drawnCardId) scheduleFieldReveal(drawnCardId, timelineMs, 1250);
       queueFlyFromSource(srcEl, {
-        imageSrc: '/hanafuda_cards/unfold.png',
+        imageSrc: 'hanafuda_cards/unfold.png',
         frontImageSrc: drawnImage,
         targetCardId: drawnCardId,
         targetSelector: '#field',
@@ -1012,7 +1016,7 @@ function queueFlyFromSource(srcEl, opts = {}) {
   if (!r) return;
   queuedFlyAnimations.push({
     fromRect: { left: r.left, top: r.top, width: r.width, height: r.height },
-    imageSrc: opts.imageSrc || '/hanafuda_cards/unfold.png',
+    imageSrc: opts.imageSrc || 'hanafuda_cards/unfold.png',
     frontImageSrc: opts.frontImageSrc || null,
     targetCardId: opts.targetCardId ?? null,
     targetSelector: opts.targetSelector || '#field',
@@ -1085,7 +1089,7 @@ function queueCaptureSequence(opts) {
     fromCards.forEach(c => {
       if (!c || seen.has(c.id)) return;
       seen.add(c.id);
-      images.push(`/hanafuda_cards/${encodeURIComponent(c.file)}`);
+      images.push(`hanafuda_cards/${encodeURIComponent(c.file)}`);
     });
     fromTouched.forEach(src => {
       if (!src || images.includes(src)) return;
@@ -1136,7 +1140,7 @@ function queueCaptureSequence(opts) {
       const card = cardMap.get(id);
       const imgSrc = (opts.flipOnFirstLeg && opts.frontImageSrc && id === opts.capturedCardId)
         ? opts.frontImageSrc
-        : `/hanafuda_cards/${encodeURIComponent(card.file)}`;
+        : `hanafuda_cards/${encodeURIComponent(card.file)}`;
       queueFlyFromSource(null, {
         fromRect: touchRect,
         imageSrc: imgSrc,
@@ -1468,7 +1472,7 @@ function animateHandPlay(cardId, cb, targetFieldCardId = null) {
     const img = el.querySelector('img');
     const r = el.getBoundingClientRect();
     pendingLocalPlayFromRect = { left: r.left, top: r.top, width: r.width, height: r.height };
-    pendingLocalPlayImageSrc = img ? img.src : '/hanafuda_cards/unfold.png';
+    pendingLocalPlayImageSrc = img ? img.src : 'hanafuda_cards/unfold.png';
     pendingLocalPlayCardId = cardId;
     el.style.visibility = 'hidden';
     cb(); // emit immediately so the fly starts as soon as the server responds
@@ -1661,7 +1665,7 @@ function showDeckReveal(card) {
   const div = document.createElement('div');
   div.className = 'card deck-flip-card';
   const img = document.createElement('img');
-  img.src = `/hanafuda_cards/${encodeURIComponent(card.file)}`;
+  img.src = `hanafuda_cards/${encodeURIComponent(card.file)}`;
   img.alt = currentLang === 'jp' ? card.nameJp : card.nameEn;
   div.appendChild(img);
   imgEl.appendChild(div);
