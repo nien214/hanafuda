@@ -1023,6 +1023,7 @@ html, body {
 #screen-game.mobile-portrait {
   --card-w: clamp(44px, min(14vw, 8.6vh), 72px);
   --card-h: calc(var(--card-w) * 1.39);
+  --hand-card-w: clamp(34px, calc((100vw - 44px) / 8), 50px);
   overflow: hidden;
 }
 
@@ -1062,10 +1063,10 @@ html, body {
   height: 100%;
   scroll-snap-align: start;
 }
-/* From center panel: swipe LEFT => opponent, swipe RIGHT => player */
-#screen-game.mobile-portrait #my-captured-panel { order: 1; }
+/* From center panel: opponent on LEFT, player on RIGHT */
+#screen-game.mobile-portrait #opp-captured-panel { order: 1; }
 #screen-game.mobile-portrait #game-main { order: 2; }
-#screen-game.mobile-portrait #opp-captured-panel { order: 3; }
+#screen-game.mobile-portrait #my-captured-panel { order: 3; }
 
 #screen-game.mobile-portrait #game-main {
   overflow: hidden;
@@ -1084,12 +1085,24 @@ html, body {
   min-height: auto;
 }
 #screen-game.mobile-portrait .hand-area {
-  gap: clamp(4px, 1vw, 7px);
-  min-height: calc(var(--card-h) + 2px);
+  gap: 2px;
+  min-height: calc(var(--hand-card-w) * 1.39 + 2px);
+}
+#screen-game.mobile-portrait #player-hand,
+#screen-game.mobile-portrait #opp-hand {
+  width: 100%;
+  flex-wrap: nowrap;
+  justify-content: space-between;
+  align-items: center;
+}
+#screen-game.mobile-portrait #player-hand .card,
+#screen-game.mobile-portrait #opp-hand .card {
+  width: var(--hand-card-w);
+  height: calc(var(--hand-card-w) * 1.39);
 }
 #screen-game.mobile-portrait .card.opp-back {
-  width: calc(var(--card-w) * 0.72);
-  height: calc(var(--card-h) * 0.72);
+  width: var(--hand-card-w);
+  height: calc(var(--hand-card-w) * 1.39);
 }
 
 #screen-game.mobile-portrait .captured-float {
