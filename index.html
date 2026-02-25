@@ -151,75 +151,81 @@
     </div>
   </div>
 
-  <!-- Main game area -->
-  <div id="game-main">
+  <!-- Swipe Stage (mobile) / Main Stage (desktop) -->
+  <div id="game-stage-scroll">
+    <div id="game-stage-track">
 
-    <!-- Left: play area -->
-    <div id="play-area">
-      <div id="opp-hand" class="hand-area opp-hand"></div>
+      <!-- Main game area -->
+      <div id="game-main">
 
-      <div id="field-deck-row">
-        <div id="field" class="field-area"
-             ondragover="event.preventDefault()"
-             ondrop="onDropToField(event)"></div>
+        <!-- Left: play area -->
+        <div id="play-area">
+          <div id="opp-hand" class="hand-area opp-hand"></div>
 
-        <div id="deck-pile">
-          <div class="deck-stack">
-            <div class="deck-card-layer deck-layer-3"></div>
-            <div class="deck-card-layer deck-layer-2"></div>
-            <div class="deck-card-layer deck-layer-1">
-              <img src="hanafuda_cards/unfold.png" alt="deck" />
+          <div id="field-deck-row">
+            <div id="field" class="field-area"
+                 ondragover="event.preventDefault()"
+                 ondrop="onDropToField(event)"></div>
+
+            <div id="deck-pile">
+              <div class="deck-stack">
+                <div class="deck-card-layer deck-layer-3"></div>
+                <div class="deck-card-layer deck-layer-2"></div>
+                <div class="deck-card-layer deck-layer-1">
+                  <img src="hanafuda_cards/unfold.png" alt="deck" />
+                </div>
+              </div>
+              <div id="deck-pile-count" class="deck-count-badge">0</div>
             </div>
           </div>
-          <div id="deck-pile-count" class="deck-count-badge">0</div>
+
+          <div id="player-hand" class="hand-area player-hand"></div>
         </div>
       </div>
 
-      <div id="player-hand" class="hand-area player-hand"></div>
-    </div>
-  </div>
+      <!-- Floating captured panels -->
+      <div id="opp-captured-panel" class="captured-float captured-float-opp">
+        <div class="capture-section opp-section">
+          <div class="cap-section-title" id="opp-cap-title">Opponent</div>
+          <div class="capture-type-row">
+            <span class="type-badge hikari">光</span>
+            <div class="cap-row-cards" id="opp-cap-hikari"></div>
+          </div>
+          <div class="capture-type-row">
+            <span class="type-badge tanzaku">短冊</span>
+            <div class="cap-row-cards" id="opp-cap-tanzaku"></div>
+          </div>
+          <div class="capture-type-row">
+            <span class="type-badge tane">種</span>
+            <div class="cap-row-cards" id="opp-cap-tane"></div>
+          </div>
+          <div class="capture-type-row">
+            <span class="type-badge kasu">滓</span>
+            <div class="cap-row-cards" id="opp-cap-kasu"></div>
+          </div>
+        </div>
+      </div>
 
-  <!-- Floating captured panels -->
-  <div id="opp-captured-panel" class="captured-float captured-float-opp">
-    <div class="capture-section opp-section">
-      <div class="cap-section-title" id="opp-cap-title">Opponent</div>
-      <div class="capture-type-row">
-        <span class="type-badge hikari">光</span>
-        <div class="cap-row-cards" id="opp-cap-hikari"></div>
-      </div>
-      <div class="capture-type-row">
-        <span class="type-badge tanzaku">短冊</span>
-        <div class="cap-row-cards" id="opp-cap-tanzaku"></div>
-      </div>
-      <div class="capture-type-row">
-        <span class="type-badge tane">種</span>
-        <div class="cap-row-cards" id="opp-cap-tane"></div>
-      </div>
-      <div class="capture-type-row">
-        <span class="type-badge kasu">滓</span>
-        <div class="cap-row-cards" id="opp-cap-kasu"></div>
-      </div>
-    </div>
-  </div>
-
-  <div id="my-captured-panel" class="captured-float captured-float-my">
-    <div class="capture-section my-section">
-      <div class="cap-section-title" id="my-cap-title">You</div>
-      <div class="capture-type-row">
-        <span class="type-badge hikari">光</span>
-        <div class="cap-row-cards" id="my-cap-hikari"></div>
-      </div>
-      <div class="capture-type-row">
-        <span class="type-badge tanzaku">短冊</span>
-        <div class="cap-row-cards" id="my-cap-tanzaku"></div>
-      </div>
-      <div class="capture-type-row">
-        <span class="type-badge tane">種</span>
-        <div class="cap-row-cards" id="my-cap-tane"></div>
-      </div>
-      <div class="capture-type-row">
-        <span class="type-badge kasu">滓</span>
-        <div class="cap-row-cards" id="my-cap-kasu"></div>
+      <div id="my-captured-panel" class="captured-float captured-float-my">
+        <div class="capture-section my-section">
+          <div class="cap-section-title" id="my-cap-title">You</div>
+          <div class="capture-type-row">
+            <span class="type-badge hikari">光</span>
+            <div class="cap-row-cards" id="my-cap-hikari"></div>
+          </div>
+          <div class="capture-type-row">
+            <span class="type-badge tanzaku">短冊</span>
+            <div class="cap-row-cards" id="my-cap-tanzaku"></div>
+          </div>
+          <div class="capture-type-row">
+            <span class="type-badge tane">種</span>
+            <div class="cap-row-cards" id="my-cap-tane"></div>
+          </div>
+          <div class="capture-type-row">
+            <span class="type-badge kasu">滓</span>
+            <div class="cap-row-cards" id="my-cap-kasu"></div>
+          </div>
+        </div>
       </div>
     </div>
   </div>

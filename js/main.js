@@ -43,6 +43,7 @@ let gameEndRevealArmedAt = 0;
 let eventToastTimer = null;
 let assetPreloadPromise = null;
 let assetLoadStats = { loaded: 0, total: 0, failed: 0 };
+let mobileStageCentered = false;
 
 const CARD_IMAGE_FILES = [
   '01_Pine Chaff 1.png',
@@ -116,7 +117,24 @@ const showScreen = id => {
   if (ls) ls.style.display = (id === 'screen-lobby') ? '' : 'none';
   // Hide deck reveal when leaving game screen
   if (id !== 'screen-game') hide('drawn-card-reveal');
+  if (id === 'screen-game') {
+    requestAnimationFrame(() => centerMobileGameStage(false));
+  } else {
+    mobileStageCentered = false;
+  }
 };
+
+function isMobilePortraitGameLayout() {
+  return window.matchMedia('(max-width: 900px) and (orientation: portrait)').matches;
+}
+
+function centerMobileGameStage(force = false) {
+  const stage = $('game-stage-scroll');
+  if (!stage || !isMobilePortraitGameLayout()) return;
+  if (mobileStageCentered && !force) return;
+  stage.scrollLeft = stage.clientWidth; // center panel is the second page (100vw offset)
+  mobileStageCentered = true;
+}
 
 function wait(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -1864,3 +1882,12 @@ function showDeckReveal(card) {
 applyTranslations();
 updateRulesContent();
 ensureAssetPreloadStarted();
+
+window.addEventListener('resize', () => {
+  if (!isMobilePortraitGameLayout()) {
+    mobileStageCentered = false;
+    return;
+  }
+  mobileStageCentered = false;
+  requestAnimationFrame(() => centerMobileGameStage(true));
+});
