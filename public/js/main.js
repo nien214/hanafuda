@@ -15,18 +15,27 @@ let deckRevealTimer    = null;
 let pendingLocalPlayCardId = null;
 let pendingLocalPlayFromRect = null;
 let pendingLocalPlayImageSrc = null;
+let pendingChoiceCardId = null;
+let pendingChoiceImageSrc = null;
 let queuedFlyAnimations = [];
 let pendingDeckDrawCard = null;
 let pendingFieldRevealAt = new Map();
 let pendingFieldRevealTimer = null;
+let pendingFieldCarryAt = new Map();
+let pendingFieldCarryTimer = null;
 let pendingCaptureRevealAt = new Map();
 let pendingCaptureRevealTimer = null;
 let fieldCardLastRects = new Map();
 let fieldSlots        = [];   // ordered slot array: card id or null (captured placeholder)
 let lastHandIds       = new Set();
+let visibleCapturedIds = new Set();
 let animationBusyUntil = 0;
 let phaseOverlayTimer = null;
 let koikoiPanelTimer = null;
+let statusLockUntil = 0;
+let statusUnlockTimer = null;
+let gameEndRevealArmedAt = 0;
+let eventToastTimer = null;
 
 /* ── DOM helpers ─────────────────────────────────────────────────────────────── */
 const $  = id => document.getElementById(id);
@@ -142,6 +151,7 @@ $('btn-play-again').onclick = () => {
 
 $('btn-shobu').onclick  = () => socket.emit('koi-koi-choice', { choice: 'shobu' });
 $('btn-koikoi').onclick = () => socket.emit('koi-koi-choice', { choice: 'koi-koi' });
+$('deck-pile').onclick = () => onDeckPileClick();
 
 /* ── Socket events ───────────────────────────────────────────────────────────── */
 socket.on('room-created', ({ code }) => {
@@ -181,6 +191,42 @@ socket.on('deck-draw', ({ card }) => {
   pendingDeckDrawCard = card;
 });
 
+socket.on('ai-koi-koi-decision', ({ choice }) => {
+  if (choice === 'koi-koi') {
+    setStatus(t('aiKoiKoiDeclared'), { force: true, lockMs: 2200 });
+  } else {
+    setStatus(t('aiShobuDeclared'), { force: true, lockMs: 2600 });
+  }
+});
+
+socket.on('yaku-achieved', ({ playerIndex, yaku, score }) => {
+  if (playerIndex === null || playerIndex === undefined) return;
+  const actorName = playerNames[playerIndex] || (playerIndex === myIndex ? 'You' : 'Opponent');
+  const yakuNames = (yaku || [])
+    .slice(0, 3)
+    .map(y => {
+      const byKey = y && y.key ? t(y.key) : '';
+      if (byKey && byKey !== y.key) return byKey;
+      return currentLang === 'jp' ? (y.nameJp || y.nameEn || '') : (y.nameEn || y.nameJp || '');
+    })
+    .filter(Boolean)
+    .join(', ');
+  const scoreText = (score !== null && score !== undefined) ? ` (${score} ${t('pts_label')})` : '';
+  const detailText = yakuNames ? `: ${yakuNames}` : '';
+  showEventToast(`${actorName} ${t('yakuFormed')}${scoreText}${detailText}`);
+});
+
+socket.on('koi-koi-declared', ({ playerIndex, choice, score }) => {
+  if (playerIndex === null || playerIndex === undefined || !choice) return;
+  const actorName = playerNames[playerIndex] || (playerIndex === myIndex ? 'You' : 'Opponent');
+  if (choice === 'koi-koi') {
+    showEventToast(`${actorName} ${t('declaredKoiKoi')}`);
+    return;
+  }
+  const scoreText = (score !== null && score !== undefined) ? ` (+${score} ${t('pts_label')})` : '';
+  showEventToast(`${actorName} ${t('declaredShobu')}${scoreText}`);
+});
+
 socket.on('opponent-left', () => {
   alert(t('oppLeft'));
   showScreen('screen-lobby');
@@ -197,8 +243,13 @@ function handlePhase(state) {
   hide('overlay-game');
   hide('drawn-card-reveal');
 
-  // AI thinking indicator
-  if (isAiTurn && state.phase !== 'round-end' && state.phase !== 'game-end') {
+  // AI thinking indicator (keep status visible during AI Koi-Koi declaration phase)
+  if (
+    isAiTurn &&
+    state.phase !== 'round-end' &&
+    state.phase !== 'game-end' &&
+    state.phase !== 'koi-koi-decision'
+  ) {
     show('ai-thinking');
     hide('status-msg');
   } else {
@@ -242,6 +293,14 @@ function handlePhase(state) {
     setStatus(isSoloMode ? t('aiThinking') : t('oppTurn') + ' (Koi-Koi…)');
     return;
   }
+  if (state.phase === 'await-deck-flip' && isMyTurn) {
+    setStatus(t('clickFlipDeck'));
+    return;
+  }
+  if (state.phase === 'await-deck-flip' && !isMyTurn) {
+    setStatus(isSoloMode ? t('aiThinking') : t('oppTurn'));
+    return;
+  }
   if (state.phase === 'capture-choice' && isMyTurn) {
     setStatus(t('chooseCapture'));
     highlightCaptureTargets(state.pendingMatches);
@@ -262,6 +321,10 @@ function handlePhase(state) {
 function renderAll() {
   if (!gameState) return;
   const s = gameState;
+  const capturedIds = new Set([
+    ...s.myCapture.map(c => c.id),
+    ...s.oppCapture.map(c => c.id),
+  ]);
 
   showScreen('screen-game');
 
@@ -275,31 +338,40 @@ function renderAll() {
   $('tb-round-val').textContent = `${s.roundNumber}/${s.totalRounds}`;
 
   renderDeckPile(s);
-  renderField(s);
-  renderMyHand(s);
+  renderField(s, capturedIds);
+  renderMyHand(s, capturedIds);
   renderOppHand(s);
   renderCaptures(s);
 }
 
 /* ── Field ───────────────────────────────────────────────────────────────────── */
-function renderField(s) {
+function renderField(s, capturedIds = new Set()) {
   const el = $('field');
-  const newFieldIds = new Set(s.field.map(c => c.id));
+  const newFieldIds = new Set(s.field.filter(c => !capturedIds.has(c.id)).map(c => c.id));
   const now = Date.now();
   for (const [id, ts] of pendingFieldRevealAt.entries()) {
     if (ts <= now || !newFieldIds.has(id)) pendingFieldRevealAt.delete(id);
+  }
+  for (const [id, carry] of pendingFieldCarryAt.entries()) {
+    if (!carry || carry.hideAt <= now) pendingFieldCarryAt.delete(id);
   }
   el.innerHTML = '';
   fieldCardLastRects = new Map();
 
   // Initialize slots on first render of a round (queueStateAnimations returned early for first state)
   if (fieldSlots.length === 0) {
-    fieldSlots = s.field.map(c => c.id);
+    fieldSlots = s.field.filter(c => !capturedIds.has(c.id)).map(c => c.id);
   }
 
-  const cardMap = new Map(s.field.map(c => [c.id, c]));
+  const cardMap = new Map(s.field.filter(c => !capturedIds.has(c.id)).map(c => [c.id, c]));
+  fieldSlots = fieldSlots.map(slotId => {
+    if (slotId === null) return null;
+    if (newFieldIds.has(slotId)) return slotId;
+    const carry = pendingFieldCarryAt.get(slotId);
+    return (carry && carry.hideAt > now) ? slotId : null;
+  });
 
-  fieldSlots.forEach(slotId => {
+  fieldSlots.forEach((slotId) => {
     if (slotId === null) {
       // Invisible placeholder — preserves the grid cell so other cards don't shift
       const ph = document.createElement('div');
@@ -308,7 +380,25 @@ function renderField(s) {
       return;
     }
     const card = cardMap.get(slotId);
-    if (!card) return; // safety: slot id not in current state
+    if (!card) {
+      const carry = pendingFieldCarryAt.get(slotId);
+      if (carry && carry.hideAt > now) {
+        const div = document.createElement('div');
+        div.className = 'card field-card';
+        div.dataset.cardId = slotId;
+        const img = document.createElement('img');
+        img.src = carry.imageSrc;
+        img.alt = '';
+        div.appendChild(img);
+        el.appendChild(div);
+        fieldCardLastRects.set(slotId, div.getBoundingClientRect());
+      } else {
+        const ph = document.createElement('div');
+        ph.className = 'card field-card field-placeholder';
+        el.appendChild(ph);
+      }
+      return;
+    }
 
     const div = makeCard(card, false, false);
     div.classList.add('field-card');
@@ -369,14 +459,41 @@ function scheduleFieldRevealFlush() {
   }, waitMs);
 }
 
+function scheduleFieldCarry(cardId, imageSrc, absoluteMs) {
+  if (cardId === null || cardId === undefined || !imageSrc) return;
+  const existing = pendingFieldCarryAt.get(cardId);
+  const hideAt = Math.max(absoluteMs || 0, existing ? existing.hideAt : 0);
+  pendingFieldCarryAt.set(cardId, { imageSrc, hideAt });
+  scheduleFieldCarryFlush();
+}
+
+function scheduleFieldCarryFlush() {
+  if (pendingFieldCarryTimer) {
+    clearTimeout(pendingFieldCarryTimer);
+    pendingFieldCarryTimer = null;
+  }
+  if (pendingFieldCarryAt.size === 0) return;
+  const nextAt = Math.min(...Array.from(pendingFieldCarryAt.values()).map(v => v.hideAt));
+  const waitMs = Math.max(0, nextAt - Date.now() + 10);
+  pendingFieldCarryTimer = setTimeout(() => {
+    pendingFieldCarryTimer = null;
+    if (gameState) renderField(gameState, new Set([
+      ...gameState.myCapture.map(c => c.id),
+      ...gameState.oppCapture.map(c => c.id),
+    ]));
+    if (pendingFieldCarryAt.size > 0) scheduleFieldCarryFlush();
+  }, waitMs);
+}
+
 /* ── My Hand ─────────────────────────────────────────────────────────────────── */
-function renderMyHand(s) {
+function renderMyHand(s, capturedIds = new Set()) {
   const el = $('player-hand');
   el.innerHTML = '';
   const isMyTurn = s.currentPlayer === myIndex && s.phase === 'hand-play';
-  const newHandIds = new Set(s.myHand.map(c => c.id));
+  const safeHand = s.myHand.filter(c => !capturedIds.has(c.id));
+  const newHandIds = new Set(safeHand.map(c => c.id));
 
-  s.myHand.forEach(card => {
+  safeHand.forEach(card => {
     const isNew = !lastHandIds.has(card.id);
     const div = makeCard(card, isMyTurn, isNew);
     if (isMyTurn) {
@@ -410,6 +527,12 @@ function renderOppHand(s) {
 function renderDeckPile(s) {
   const badge = $('deck-pile-count');
   if (badge) badge.textContent = s.stockCount;
+  const canFlip = canManuallyFlipDeck(s);
+  const pile = $('deck-pile');
+  if (pile) {
+    pile.classList.toggle('deck-clickable', canFlip);
+    pile.classList.toggle('deck-disabled', !canFlip);
+  }
 
   const layer3 = document.querySelector('.deck-layer-3');
   const layer2 = document.querySelector('.deck-layer-2');
@@ -421,7 +544,8 @@ function renderDeckPile(s) {
 
 /* ── Captures ────────────────────────────────────────────────────────────────── */
 function renderCaptures(s) {
-  const newIds = new Set([...s.myCapture, ...s.oppCapture].map(c => c.id));
+  const allCaptured = [...s.myCapture, ...s.oppCapture];
+  const newIds = new Set(allCaptured.map(c => c.id));
   const now = Date.now();
   for (const [id, ts] of pendingCaptureRevealAt.entries()) {
     if (ts <= now || !newIds.has(id)) pendingCaptureRevealAt.delete(id);
@@ -436,19 +560,30 @@ function renderCaptures(s) {
   if (oppTitleEl) oppTitleEl.textContent = oppName;
 
   // Render per-type rows for each player
+  const seenGlobal = new Set();
   ['hikari', 'tanzaku', 'tane', 'kasu'].forEach(type => {
-    renderTypeRow('my-cap-'  + type, s.myCapture.filter(c => c.type === type),  lastCaptureIds);
-    renderTypeRow('opp-cap-' + type, s.oppCapture.filter(c => c.type === type), lastCaptureIds);
+    renderTypeRow('my-cap-'  + type, s.myCapture.filter(c => c.type === type),  lastCaptureIds, seenGlobal);
+    renderTypeRow('opp-cap-' + type, s.oppCapture.filter(c => c.type === type), lastCaptureIds, seenGlobal);
+  });
+
+  // Once a captured card is visible, never hide it again in this round.
+  visibleCapturedIds = new Set([...visibleCapturedIds].filter(id => newIds.has(id)));
+  allCaptured.forEach(card => {
+    if (!isCaptureCardPendingReveal(card.id)) visibleCapturedIds.add(card.id);
   });
 
   lastCaptureIds = newIds;
 }
 
-function renderTypeRow(elId, cards, prevIds) {
+function renderTypeRow(elId, cards, prevIds, seenGlobal = new Set()) {
   const el = $(elId);
   if (!el) return;
   el.innerHTML = '';
+  const seenLocal = new Set();
   cards.forEach(card => {
+    if (seenLocal.has(card.id) || seenGlobal.has(card.id)) return;
+    seenLocal.add(card.id);
+    seenGlobal.add(card.id);
     const div = document.createElement('div');
     div.className = 'cap-card';
     div.dataset.cardId = card.id;
@@ -469,11 +604,13 @@ function renderTypeRow(elId, cards, prevIds) {
 
 function isCaptureCardPendingReveal(cardId) {
   const revealAt = pendingCaptureRevealAt.get(cardId);
+  if (visibleCapturedIds.has(cardId)) return false;
   return !!revealAt && revealAt > Date.now();
 }
 
 function scheduleCaptureRevealAt(cardId, absoluteMs) {
   if (cardId === null || cardId === undefined) return;
+  if (visibleCapturedIds.has(cardId)) return;
   pendingCaptureRevealAt.set(cardId, absoluteMs);
   scheduleCaptureRevealFlush();
 }
@@ -498,6 +635,7 @@ function scheduleCaptureRevealFlush() {
 // scheduleCaptureRevealAt from playQueuedAnimations.
 function scheduleCaptureReveal(cardId, delayMs, durationMs) {
   if (cardId === null || cardId === undefined) return;
+  if (visibleCapturedIds.has(cardId)) return;
   const revealAt = Date.now() + Math.max(0, delayMs || 0) + Math.max(0, durationMs || 0) + 90;
   pendingCaptureRevealAt.set(cardId, revealAt);
   scheduleCaptureRevealFlush();
@@ -523,8 +661,30 @@ function queueStateAnimations(prev, next) {
     pendingLocalPlayCardId = null;
     pendingLocalPlayFromRect = null;
     pendingLocalPlayImageSrc = null;
+    pendingChoiceCardId = null;
+    pendingChoiceImageSrc = null;
+    queuedFlyAnimations = [];
+    pendingFieldRevealAt.clear();
+    pendingFieldCarryAt.clear();
+    pendingCaptureRevealAt.clear();
+    visibleCapturedIds.clear();
+    animationBusyUntil = 0;
+    if (pendingFieldRevealTimer) {
+      clearTimeout(pendingFieldRevealTimer);
+      pendingFieldRevealTimer = null;
+    }
+    if (pendingCaptureRevealTimer) {
+      clearTimeout(pendingCaptureRevealTimer);
+      pendingCaptureRevealTimer = null;
+    }
+    if (pendingFieldCarryTimer) {
+      clearTimeout(pendingFieldCarryTimer);
+      pendingFieldCarryTimer = null;
+    }
+    document.querySelectorAll('.flying-card').forEach(el => el.remove());
     lastHandIds = new Set();
     fieldSlots = next.field.map(c => c.id);
+    lastCaptureIds = new Set();
     return;
   }
   if (prev.phase === 'round-end' || prev.phase === 'game-end') return;
@@ -532,6 +692,10 @@ function queueStateAnimations(prev, next) {
   const prevFieldIds = new Set(prev.field.map(c => c.id));
   const addedFieldCards = next.field.filter(c => !prevFieldIds.has(c.id));
   const removedFieldCards = prev.field.filter(c => !next.field.find(nc => nc.id === c.id));
+  const removedFieldMonthCounts = new Map();
+  removedFieldCards.forEach(c => {
+    removedFieldMonthCounts.set(c.month, (removedFieldMonthCounts.get(c.month) || 0) + 1);
+  });
   const preferredTargetId = addedFieldCards.length ? addedFieldCards[0].id : null;
   const addedFieldCardIds = new Set(addedFieldCards.map(c => c.id));
   // Per-sequence field card assignment: each capture sequence claims the field card
@@ -539,30 +703,65 @@ function queueStateAnimations(prev, next) {
   // field card belongs to the player's play vs. the deck draw when both happen
   // in the same state update and each captures a different field card.
   const _assignedFieldCardIds = new Set();
-  function pickFieldCard(month) {
-    let card = month != null
-      ? removedFieldCards.find(c => c.month === month && !_assignedFieldCardIds.has(c.id))
-      : null;
-    // Fallback: any remaining unassigned removed field card
-    if (!card) card = removedFieldCards.find(c => !_assignedFieldCardIds.has(c.id)) || null;
-    if (card) _assignedFieldCardIds.add(card.id);
-    return card;
+  function pickFieldCards(month, desiredCount = 1) {
+    const cards = [];
+    if (month != null) {
+      removedFieldCards.forEach(c => {
+        if (cards.length >= desiredCount) return;
+        if (c.month === month && !_assignedFieldCardIds.has(c.id)) {
+          _assignedFieldCardIds.add(c.id);
+          cards.push(c);
+        }
+      });
+    }
+    // Fallback: any remaining unassigned removed field cards
+    removedFieldCards.forEach(c => {
+      if (cards.length >= desiredCount) return;
+      if (!_assignedFieldCardIds.has(c.id)) {
+        _assignedFieldCardIds.add(c.id);
+        cards.push(c);
+      }
+    });
+    return cards;
   }
-  function fieldCardProps(card) {
+  function fieldCardProps(card, cards = []) {
     return {
       touchFieldCardId: card != null ? card.id : null,
+      touchFieldCardIds: cards.map(c => c.id),
       touchFieldCardImageSrc: card ? `/hanafuda_cards/${encodeURIComponent(card.file)}` : null,
+      touchFieldCardImageSrcs: cards.map(c => `/hanafuda_cards/${encodeURIComponent(c.file)}`),
       touchRect: card ? (fieldCardLastRects.get(card.id) || null) : null,
     };
   }
+  function desiredFieldCountForMonth(month) {
+    if (month == null) return 1;
+    const removedCount = removedFieldMonthCounts.get(month) || 0;
+    return removedCount >= 3 ? 3 : 1;
+  }
+  function sequenceRevealIds(captureCards, newlyCapturedPool, fallbackId = null) {
+    const poolIds = new Set((newlyCapturedPool || []).map(c => c.id));
+    const ids = (captureCards || [])
+      .map(c => c && c.id)
+      .filter(id => id != null && poolIds.has(id));
+    if (ids.length > 0) return [...new Set(ids)];
+    if (fallbackId != null && poolIds.has(fallbackId)) return [fallbackId];
+    return [];
+  }
 
-  // Maintain slot positions: mark captured cards as null (preserve grid holes),
-  // then place newly arrived cards into the first empty slot (reusing captured positions)
-  // so new cards never push beyond row 2 unless rows 1–2 are fully occupied.
+  // Maintain slot positions and reuse freed slots so field layout stays stable.
   const nextFieldIds = new Set(next.field.map(c => c.id));
-  fieldSlots = fieldSlots.map(id => (id !== null && !nextFieldIds.has(id)) ? null : id);
+  const removedById = new Map(removedFieldCards.map(c => [c.id, c]));
+  fieldSlots = fieldSlots.map(id => {
+    if (id === null) return null;
+    if (nextFieldIds.has(id)) return id;
+    // Keep removed card ids in their slots for this update so carry rendering can
+    // hold them visible until stack travel begins (no disappear/blink).
+    if (removedById.has(id)) return id;
+    const carry = pendingFieldCarryAt.get(id);
+    return (carry && carry.hideAt > Date.now()) ? id : null;
+  });
   addedFieldCards.forEach(c => {
-    const emptyIdx = fieldSlots.indexOf(null);
+    const emptyIdx = fieldSlots.findIndex(v => v === null);
     if (emptyIdx !== -1) {
       fieldSlots[emptyIdx] = c.id;  // reuse the freed slot
     } else {
@@ -570,6 +769,10 @@ function queueStateAnimations(prev, next) {
     }
   });
 
+  const FLY_TO_FIELD_MS = 1500;
+  const DRAW_TO_FIELD_MS = 1460;
+  const CAPTURE_SEQUENCE_MS = 3000;
+  const CAPTURE_SETTLE_MS = 700; // keep captured cards visibly settled before next step
   let timelineMs = 0;
 
   const nextMyIds = new Set(next.myHand.map(c => c.id));
@@ -589,18 +792,21 @@ function queueStateAnimations(prev, next) {
     if (pendingLocalPlayCardId === removed.id) {
       pendingLocalPlayCardId = null;
       if (nextMyCaptureIds.has(removed.id)) {
-        const fc = pickFieldCard(removed.month);
-        const fcp = fieldCardProps(fc);
+        const desiredFieldCount = desiredFieldCountForMonth(removed.month);
+        const fcs = pickFieldCards(removed.month, desiredFieldCount);
+        const fcp = fieldCardProps(fcs[0] || null, fcs);
+        const captureCards = [removed, ...fcs];
         queueCaptureSequence({
           sourceRect: pendingLocalPlayFromRect,
           sourceRectFallbackSelector: '#field',
           imageSrc: pendingLocalPlayImageSrc || `/hanafuda_cards/${encodeURIComponent(removed.file)}`,
           capturedCardId: removed.id,
-          revealCardIds: [removed.id, fcp.touchFieldCardId].filter(id => id != null && newMyCapturedCards.some(c => c.id === id)),
+          captureCards,
+          revealCardIds: sequenceRevealIds(captureCards, newMyCapturedCards, removed.id),
           ...fcp,
           delayBaseMs: timelineMs
         });
-        timelineMs += 1120;
+        timelineMs += CAPTURE_SEQUENCE_MS + CAPTURE_SETTLE_MS;
       } else {
         const myPlayedLandedId = addedFieldCardIds.has(removed.id) ? removed.id : preferredTargetId;
         if (addedFieldCardIds.has(myPlayedLandedId)) scheduleFieldReveal(myPlayedLandedId, timelineMs, 1300);
@@ -612,24 +818,31 @@ function queueStateAnimations(prev, next) {
           delayBaseMs: timelineMs,
           durationMs: 1300
         });
-        timelineMs += 1500;
+        timelineMs += FLY_TO_FIELD_MS;
+        if (next.phase === 'capture-choice') {
+          pendingChoiceCardId = removed.id;
+          pendingChoiceImageSrc = pendingLocalPlayImageSrc || `/hanafuda_cards/${encodeURIComponent(removed.file)}`;
+        }
       }
       pendingLocalPlayFromRect = null;
       pendingLocalPlayImageSrc = null;
     } else {
       const srcEl = document.querySelector(`#player-hand .card[data-card-id="${removed.id}"]`);
       if (nextMyCaptureIds.has(removed.id)) {
-        const fc = pickFieldCard(removed.month);
-        const fcp = fieldCardProps(fc);
+        const desiredFieldCount = desiredFieldCountForMonth(removed.month);
+        const fcs = pickFieldCards(removed.month, desiredFieldCount);
+        const fcp = fieldCardProps(fcs[0] || null, fcs);
+        const captureCards = [removed, ...fcs];
         queueCaptureSequence({
           sourceEl: srcEl,
           imageSrc: `/hanafuda_cards/${encodeURIComponent(removed.file)}`,
           capturedCardId: removed.id,
-          revealCardIds: [removed.id, fcp.touchFieldCardId].filter(id => id != null && newMyCapturedCards.some(c => c.id === id)),
+          captureCards,
+          revealCardIds: sequenceRevealIds(captureCards, newMyCapturedCards, removed.id),
           ...fcp,
           delayBaseMs: timelineMs
         });
-        timelineMs += 1120;
+        timelineMs += CAPTURE_SEQUENCE_MS + CAPTURE_SETTLE_MS;
       } else {
         const myPlayedLandedId = addedFieldCardIds.has(removed.id) ? removed.id : preferredTargetId;
         if (addedFieldCardIds.has(myPlayedLandedId)) scheduleFieldReveal(myPlayedLandedId, timelineMs, 1300);
@@ -640,7 +853,7 @@ function queueStateAnimations(prev, next) {
           delayBaseMs: timelineMs,
           durationMs: 1300
         });
-        timelineMs += 1500;
+        timelineMs += FLY_TO_FIELD_MS;
       }
     }
   } else if (pendingLocalPlayCardId !== null) {
@@ -649,27 +862,69 @@ function queueStateAnimations(prev, next) {
     pendingLocalPlayImageSrc = null;
   }
 
-  if (prev.oppHandCount === next.oppHandCount + 1) {
-    const srcEl = document.querySelector('#opp-hand .card:last-child');
-    const oppPlayedCaptured = nextOppCaptureIds.size > prev.oppCapture.length;
-    if (oppPlayedCaptured) {
-      const newlyCapturedCards = newOppCapturedCards;
-      const newlyCaptured = newlyCapturedCards[0];
-      const fc = pickFieldCard(oppPlayedCard ? oppPlayedCard.month : null);
-      const fcp = fieldCardProps(fc);
-      // Reveal opponent's card face-up from the moment it leaves their hand
-      const oppFaceImg = oppPlayedCard
-        ? `/hanafuda_cards/${encodeURIComponent(oppPlayedCard.file)}`
-        : '/hanafuda_cards/unfold.png';
+  // Resolve "capture-choice" hand card capture before any deck-draw animation.
+  if (prev.phase === 'capture-choice' && pendingChoiceCardId !== null) {
+    const capturedByMe = nextMyCaptureIds.has(pendingChoiceCardId);
+    const capturedByOpp = nextOppCaptureIds.has(pendingChoiceCardId);
+    const capturePool = capturedByMe ? newMyCapturedCards : (capturedByOpp ? newOppCapturedCards : []);
+    const playedCard =
+      capturePool.find(c => c.id === pendingChoiceCardId) ||
+      next.myCapture.find(c => c.id === pendingChoiceCardId) ||
+      next.oppCapture.find(c => c.id === pendingChoiceCardId) ||
+      null;
+    if (playedCard) {
+      const desiredFieldCount = desiredFieldCountForMonth(playedCard.month);
+      const fcs = pickFieldCards(playedCard.month, desiredFieldCount);
+      const fcp = fieldCardProps(fcs[0] || null, fcs);
+      const captureCards = [playedCard, ...fcs];
       queueCaptureSequence({
-        sourceEl: srcEl,
-        imageSrc: oppFaceImg,
-        capturedCardId: newlyCaptured ? newlyCaptured.id : null,
-        revealCardIds: newlyCapturedCards.map(c => c.id),
+        sourceRectFallbackSelector: '#field',
+        imageSrc: pendingChoiceImageSrc || `/hanafuda_cards/${encodeURIComponent(playedCard.file)}`,
+        capturedCardId: playedCard.id,
+        captureCards,
+        revealCardIds: sequenceRevealIds(captureCards, capturePool, playedCard.id),
         ...fcp,
         delayBaseMs: timelineMs
       });
-      timelineMs += 1320;
+      timelineMs += CAPTURE_SEQUENCE_MS + CAPTURE_SETTLE_MS;
+    }
+    pendingChoiceCardId = null;
+    pendingChoiceImageSrc = null;
+  }
+
+  if (prev.oppHandCount === next.oppHandCount + 1) {
+    const srcEl = document.querySelector('#opp-hand .card:last-child');
+    // True only if opp's HAND card itself captured — deck-draw-only captures must NOT trigger this.
+    // (nextOppCaptureIds.size > prev.oppCapture.length is wrong: it fires for deck-draw captures too)
+    const oppHandCaptured = newOppCapturedCards.some(c => !prevFieldIds.has(c.id) && c.id !== drawnCardId);
+    if (oppHandCaptured) {
+      const playedMonth = oppPlayedCard ? oppPlayedCard.month : null;
+      const desiredFieldCount = desiredFieldCountForMonth(playedMonth);
+      const fcs = pickFieldCards(playedMonth, desiredFieldCount);
+      const fcp = fieldCardProps(fcs[0] || null, fcs);
+      // Reveal opponent's card face-up from the moment it leaves their hand
+      const oppFaceImg = oppPlayedCard
+        ? `/hanafuda_cards/${encodeURIComponent(oppPlayedCard.file)}`
+        : (newOppCapturedCards[0]
+          ? `/hanafuda_cards/${encodeURIComponent(newOppCapturedCards[0].file)}`
+          : '/hanafuda_cards/unfold.png');
+      const captureCards = [
+        ...(oppPlayedCard ? [oppPlayedCard] : []),
+        ...fcs
+      ];
+      // Use the opp's played card id as the primary capture id (not newlyCaptured[0] which
+      // could be a deck-draw card if the array happens to be ordered that way).
+      const primaryCapturedId = oppPlayedCard ? oppPlayedCard.id : (newOppCapturedCards[0] ? newOppCapturedCards[0].id : null);
+      queueCaptureSequence({
+        sourceEl: srcEl,
+        imageSrc: oppFaceImg,
+        capturedCardId: primaryCapturedId,
+        captureCards,
+        revealCardIds: sequenceRevealIds(captureCards, newOppCapturedCards, primaryCapturedId),
+        ...fcp,
+        delayBaseMs: timelineMs
+      });
+      timelineMs += CAPTURE_SEQUENCE_MS + CAPTURE_SETTLE_MS;
     } else {
       const oppFieldCard = oppPlayedCard;
       const oppFieldTargetId = oppFieldCard ? oppFieldCard.id : preferredTargetId;
@@ -677,7 +932,9 @@ function queueStateAnimations(prev, next) {
       // Reveal opponent's card face-up from the moment it leaves their hand
       const oppFaceImg = oppFieldCard
         ? `/hanafuda_cards/${encodeURIComponent(oppFieldCard.file)}`
-        : '/hanafuda_cards/unfold.png';
+        : (addedFieldCards[0]
+          ? `/hanafuda_cards/${encodeURIComponent(addedFieldCards[0].file)}`
+          : '/hanafuda_cards/unfold.png');
       queueFlyFromSource(srcEl, {
         imageSrc: oppFaceImg,
         targetCardId: oppFieldTargetId,
@@ -685,7 +942,7 @@ function queueStateAnimations(prev, next) {
         delayBaseMs: timelineMs,
         durationMs: 1120
       });
-      timelineMs += 1320;
+      timelineMs += FLY_TO_FIELD_MS;
     }
   }
 
@@ -709,21 +966,29 @@ function queueStateAnimations(prev, next) {
         durationMs: 1250,
         delayBaseMs: timelineMs
       });
-      timelineMs += 1460;
+      timelineMs += DRAW_TO_FIELD_MS;
     } else if (drawnCapturedMy || drawnCapturedOpp) {
-      const fc = pickFieldCard(pendingDeckDrawCard ? pendingDeckDrawCard.month : null);
-      const fcp = fieldCardProps(fc);
+      const capturePool = drawnCapturedMy ? newMyCapturedCards : newOppCapturedCards;
+      const drawMonth = pendingDeckDrawCard ? pendingDeckDrawCard.month : null;
+      const desiredFieldCount = desiredFieldCountForMonth(drawMonth);
+      const fcs = pickFieldCards(drawMonth, desiredFieldCount);
+      const fcp = fieldCardProps(fcs[0] || null, fcs);
+      const captureCards = [
+        ...(pendingDeckDrawCard ? [pendingDeckDrawCard] : []),
+        ...fcs
+      ];
       queueCaptureSequence({
         sourceEl: srcEl,
         imageSrc: '/hanafuda_cards/unfold.png',
         frontImageSrc: drawnImage,
         flipOnFirstLeg: true,
         capturedCardId: drawnCardId,
-        revealCardIds: (drawnCapturedMy ? newMyCapturedCards : newOppCapturedCards).map(c => c.id),
+        captureCards,
+        revealCardIds: sequenceRevealIds(captureCards, capturePool, drawnCardId),
         ...fcp,
         delayBaseMs: timelineMs
       });
-      timelineMs += 1580;
+      timelineMs += CAPTURE_SEQUENCE_MS + CAPTURE_SETTLE_MS;
     } else {
       if (drawnCardId) scheduleFieldReveal(drawnCardId, timelineMs, 1250);
       queueFlyFromSource(srcEl, {
@@ -736,7 +1001,7 @@ function queueStateAnimations(prev, next) {
         durationMs: 1250,
         delayBaseMs: timelineMs
       });
-      timelineMs += 1460;
+      timelineMs += DRAW_TO_FIELD_MS;
     }
     pendingDeckDrawCard = null;
   }
@@ -755,10 +1020,12 @@ function queueFlyFromSource(srcEl, opts = {}) {
     toRect: opts.toRect || null,
     flip: !!opts.flip,
     scaleToTarget: !!opts.scaleToTarget,
+    stackImages: opts.stackImages || null,
     revealCaptureCardIds: opts.revealCaptureCardIds || null,
     revealFieldCardId: opts.revealFieldCardId || null,
     durationMs: opts.durationMs || 500,
-    delayMs: (opts.delayBaseMs || 0) + (opts.delayMs ?? 0)
+    delayMs: (opts.delayBaseMs || 0) + (opts.delayMs ?? 0),
+    group: opts.group || null   // items with the same group key run in parallel
   });
 }
 
@@ -799,18 +1066,49 @@ function queueCaptureSequence(opts) {
     };
   }
 
-  const firstDuration = 760;
-  const secondDuration = 980;
+  const firstDuration = 900;
+  const secondDuration = 1100;
   const delayBase = opts.delayBaseMs || 0;
   const revealIds = (opts.revealCardIds && opts.revealCardIds.length)
     ? opts.revealCardIds
     : [opts.capturedCardId];
+  const captureStackImages = (() => {
+    const fromCards = opts.captureCards || [];
+    const fromTouched = [];
+    if (opts.touchFieldCardImageSrcs && opts.touchFieldCardImageSrcs.length) {
+      fromTouched.push(...opts.touchFieldCardImageSrcs);
+    } else if (opts.touchFieldCardImageSrc) {
+      fromTouched.push(opts.touchFieldCardImageSrc);
+    }
+    const seen = new Set();
+    const images = [];
+    fromCards.forEach(c => {
+      if (!c || seen.has(c.id)) return;
+      seen.add(c.id);
+      images.push(`/hanafuda_cards/${encodeURIComponent(c.file)}`);
+    });
+    fromTouched.forEach(src => {
+      if (!src || images.includes(src)) return;
+      images.push(src);
+    });
+    return images;
+  })();
 
   // Preliminary hiding: mark captured cards as pending BEFORE renderAll runs, so
   // renderCaptures gives them pending-cap-hidden (they won't pop in early).
   // playQueuedAnimations will override with the accurate absolute time.
   const preliminaryTotalMs = delayBase + firstDuration + 80 + secondDuration;
   revealIds.forEach(id => scheduleCaptureReveal(id, 0, preliminaryTotalMs));
+  const carryIds = (opts.touchFieldCardIds && opts.touchFieldCardIds.length)
+    ? opts.touchFieldCardIds
+    : ((opts.touchFieldCardId != null) ? [opts.touchFieldCardId] : []);
+  carryIds.forEach((cardId, idx) => {
+    const carrySrc = (opts.touchFieldCardImageSrcs && opts.touchFieldCardImageSrcs[idx])
+      ? opts.touchFieldCardImageSrcs[idx]
+      : (opts.touchFieldCardImageSrc ||
+        ((opts.touchFieldCardImageSrcs && opts.touchFieldCardImageSrcs.length) ? opts.touchFieldCardImageSrcs[0] : null));
+    scheduleFieldCarry(cardId, carrySrc, Date.now() + delayBase + firstDuration + 60);
+  });
 
   // Leg 1: played card travels from source → field card position (they "meet")
   queueFlyFromSource(null, {
@@ -823,27 +1121,48 @@ function queueCaptureSequence(opts) {
     delayMs: delayBase
   });
 
-  // Leg 2a: played card travels from field card position → its capture slot
-  queueFlyFromSource(null, {
-    fromRect: touchRect,
-    imageSrc: opts.frontImageSrc || opts.imageSrc,
-    targetElementSelector: `.cap-card[data-card-id="${opts.capturedCardId}"]`,
-    scaleToTarget: true,
-    revealCaptureCardIds: revealIds,
-    durationMs: secondDuration,
-    delayMs: delayBase + firstDuration + 80
-  });
+  // Step 2: each captured card flies simultaneously to its own slot in the capture panel.
+  // Cards that can be matched to a card object get individual flights (parallel group).
+  // Any remaining ids fall back to a single bundle animation.
+  const leg2DelayMs = delayBase + firstDuration + 80;
+  const leg2Group = `cap2-${delayBase}-${opts.capturedCardId}`;
+  const cardMap = new Map((opts.captureCards || []).filter(Boolean).map(c => [c.id, c]));
+  const revealWithCard  = revealIds.filter(id => cardMap.has(id));
+  const revealNoCard    = revealIds.filter(id => !cardMap.has(id));
 
-  // Leg 2b: matched field card also travels from its position → its own capture slot
-  // (runs concurrently with 2a — same delayMs so both start together)
-  if (opts.touchFieldCardImageSrc && opts.touchFieldCardId != null) {
+  if (revealWithCard.length > 1) {
+    // Multiple known cards — each flies to its own cap-card position in parallel
+    revealWithCard.forEach(id => {
+      const card = cardMap.get(id);
+      const imgSrc = (opts.flipOnFirstLeg && opts.frontImageSrc && id === opts.capturedCardId)
+        ? opts.frontImageSrc
+        : `/hanafuda_cards/${encodeURIComponent(card.file)}`;
+      queueFlyFromSource(null, {
+        fromRect: touchRect,
+        imageSrc: imgSrc,
+        targetElementSelector: `.cap-card[data-card-id="${id}"]`,
+        scaleToTarget: true,
+        revealCaptureCardIds: [id],
+        durationMs: secondDuration,
+        delayMs: leg2DelayMs,
+        group: leg2Group
+      });
+    });
+    // Reveal any ids we didn't have a card object for at the same time
+    if (revealNoCard.length > 0) {
+      revealNoCard.forEach(id => scheduleCaptureReveal(id, leg2DelayMs, secondDuration));
+    }
+  } else {
+    // Single card or no card objects — original bundle animation
     queueFlyFromSource(null, {
       fromRect: touchRect,
-      imageSrc: opts.touchFieldCardImageSrc,
-      targetElementSelector: `.cap-card[data-card-id="${opts.touchFieldCardId}"]`,
+      imageSrc: captureStackImages[0] || opts.frontImageSrc || opts.imageSrc,
+      stackImages: captureStackImages.length > 1 ? captureStackImages : null,
+      targetElementSelector: `.cap-card[data-card-id="${opts.capturedCardId}"]`,
       scaleToTarget: true,
+      revealCaptureCardIds: revealIds,
       durationMs: secondDuration,
-      delayMs: delayBase + firstDuration + 80
+      delayMs: leg2DelayMs
     });
   }
 }
@@ -854,36 +1173,48 @@ function playQueuedAnimations() {
   queuedFlyAnimations = [];
   items.sort((a, b) => (a.delayMs || 0) - (b.delayMs || 0));
 
-  // Process in groups of items that share the same requested delay.
-  // Items within a group start at the same time (concurrent); the cursor
-  // only advances by the longest animation in each group so shorter
-  // concurrent animations never push later groups backward.
-  let cursor = 0;
-  let maxEnd = Date.now();
-  let i = 0;
-  while (i < items.length) {
-    const groupDelay = items[i].delayMs || 0;
-    let j = i;
-    while (j < items.length && (items[j].delayMs || 0) === groupDelay) j++;
-    const group = items.slice(i, j);
+  // Build process order: items with the same `group` key are batched together and
+  // run in parallel (same startAt). Items without a group each form their own batch.
+  const processOrder = [];   // array of item-arrays (batches)
+  const groupMap = new Map();
+  items.forEach(item => {
+    const g = item.group || null;
+    if (g && groupMap.has(g)) {
+      groupMap.get(g).push(item);
+    } else {
+      const batch = [item];
+      processOrder.push(batch);
+      if (g) groupMap.set(g, batch);
+    }
+  });
 
-    const startAt = Math.max(cursor, groupDelay);
-    let maxGroupDuration = 0;
-    group.forEach(item => {
+  const now = Date.now();
+  const batchBaseOffset = Math.max(0, animationBusyUntil - now);
+  let cursor = batchBaseOffset;
+  let maxEnd = now + batchBaseOffset;
+
+  processOrder.forEach(batch => {
+    const repItem = batch[0];
+    const requested = batchBaseOffset + (repItem.delayMs || 0);
+    const startAt = Math.max(cursor, requested);
+    const maxDuration = Math.max(...batch.map(it => it.durationMs || 500));
+
+    batch.forEach(item => {
       setTimeout(() => animateFlyCard(item), startAt);
-      const endAt = Date.now() + startAt + (item.durationMs || 500);
+      const endAt = now + startAt + (item.durationMs || 500);
       if (item.revealCaptureCardIds && item.revealCaptureCardIds.length) {
-        item.revealCaptureCardIds.forEach(cardId => scheduleCaptureRevealAt(cardId, endAt + 100));
+        // Reveal slightly before fly card is removed (endAt + 20 vs removal at duration + 80)
+        // so the real card is already visible when the fly card disappears — no blink gap.
+        item.revealCaptureCardIds.forEach(cardId => scheduleCaptureRevealAt(cardId, endAt + 20));
       }
       if (item.revealFieldCardId) {
-        scheduleFieldRevealAbsolute(item.revealFieldCardId, endAt + 90);
+        scheduleFieldRevealAbsolute(item.revealFieldCardId, endAt + 20);
       }
       if (endAt > maxEnd) maxEnd = endAt;
-      maxGroupDuration = Math.max(maxGroupDuration, item.durationMs || 500);
     });
-    cursor = startAt + maxGroupDuration + 180;
-    i = j;
-  }
+
+    cursor = startAt + maxDuration + 180;
+  });
   animationBusyUntil = Math.max(animationBusyUntil, maxEnd);
 }
 
@@ -944,10 +1275,24 @@ function animateFlyCard(item) {
       </div>
     `;
   } else {
-    const img = document.createElement('img');
-    img.src = item.imageSrc;
-    img.alt = '';
-    fly.appendChild(img);
+    if (item.stackImages && item.stackImages.length > 0) {
+      const stack = document.createElement('div');
+      stack.className = 'fly-stack';
+      item.stackImages.slice(0, 4).forEach((src, idx) => {
+        const img = document.createElement('img');
+        img.src = src;
+        img.alt = '';
+        img.style.transform = `translate(${idx * 6}px, ${idx * 4}px)`;
+        img.style.zIndex = String(100 - idx);
+        stack.appendChild(img);
+      });
+      fly.appendChild(stack);
+    } else {
+      const img = document.createElement('img');
+      img.src = item.imageSrc;
+      img.alt = '';
+      fly.appendChild(img);
+    }
   }
   document.body.appendChild(fly);
   fly.style.opacity = '1';
@@ -968,7 +1313,10 @@ function animateFlyCard(item) {
     if (inner) setTimeout(() => { inner.style.transform = 'rotateY(180deg)'; }, Math.floor(duration * 0.18));
   }
 
-  setTimeout(() => fly.remove(), duration + 40);
+  // Keep fly card alive until 80ms after animation ends so the real card
+  // (revealed at endAt + 20ms) has time to appear before the fly disappears.
+  // This eliminates the ~60ms blink gap between fly removal and card reveal.
+  setTimeout(() => fly.remove(), duration + 80);
 }
 
 function showEndOverlayWhenReady(showFn) {
@@ -1014,9 +1362,49 @@ function showKoiKoiPanelWhenReady(state) {
   }, waitMs + 40);
 }
 
-/* ── Status ──────────────────────────────────────────────────────────────────── */
-function setStatus(msg) {
+function setStatus(msg, opts = {}) {
+  const force = !!opts.force;
+  const lockMs = Math.max(0, opts.lockMs || 0);
+  if (!force && Date.now() < statusLockUntil) return;
   $('status-msg').textContent = msg;
+  if (lockMs > 0) {
+    statusLockUntil = Date.now() + lockMs;
+    if (statusUnlockTimer) clearTimeout(statusUnlockTimer);
+    statusUnlockTimer = setTimeout(() => {
+      statusUnlockTimer = null;
+      if (gameState) handlePhase(gameState);
+    }, lockMs + 30);
+  }
+}
+
+function showEventToast(msg, durationMs = 2400) {
+  let el = $('event-toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'event-toast';
+    el.className = 'event-toast';
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.classList.add('show');
+  if (eventToastTimer) clearTimeout(eventToastTimer);
+  eventToastTimer = setTimeout(() => {
+    el.classList.remove('show');
+    eventToastTimer = null;
+  }, Math.max(900, durationMs));
+}
+
+function canManuallyFlipDeck(state = gameState) {
+  return !!state &&
+    state.phase === 'await-deck-flip' &&
+    state.currentPlayer === myIndex &&
+    state.stockCount > 0;
+}
+
+function onDeckPileClick() {
+  if (!canManuallyFlipDeck(gameState)) return;
+  if (Date.now() + 30 < getAnimationsFullyCompleteAt()) return;
+  socket.emit('flip-deck');
 }
 
 /* ── Drag & Drop ─────────────────────────────────────────────────────────────── */
@@ -1141,10 +1529,33 @@ function showRoundEnd(state) {
 
   let body = '';
   if (win !== null) {
-    const koiRows = state.koiKoiCalled || [false, false];
-    body += `<div class="round-score-row"><span>${winnerName}</span><span>+${pts} ${t('pts_label')}</span></div>`;
-    if (koiRows[win]) body += `<div class="round-score-row"><span>${t('koiKoiDoubled')}</span><span></span></div>`;
-    if (koiRows[1-win]) body += `<div class="round-score-row"><span>${t('oppKoiBonus')}</span><span></span></div>`;
+    const koiRows = summary?.koiKoiCalled || state.koiKoiCalled || [false, false];
+    const winnerYaku = win === 0 ? (summary?.p0Yaku || []) : (summary?.p1Yaku || []);
+    const basePts = winnerYaku.reduce((sum, y) => sum + (y.pts || 0), 0);
+    const didSevenDouble = basePts >= 7;
+    const didWinnerKoiDouble = !!koiRows[win];
+    const didOppKoiBonus = !!koiRows[1 - win];
+
+    body += `<div class="round-detail-title">${winnerName} ${t('wonBy')}</div>`;
+    body += `<div class="round-detail-subtitle">${t('winningYaku')}</div>`;
+    if (winnerYaku.length === 0) {
+      body += `<div class="round-score-row"><span>${t('noYaku')}</span><span>0 ${t('pts_label')}</span></div>`;
+    } else {
+      winnerYaku.forEach(y => {
+        const fromKey = y.key ? t(y.key) : '';
+        const localized = (fromKey && fromKey !== y.key)
+          ? fromKey
+          : (currentLang === 'jp' ? y.nameJp : y.nameEn);
+        body += `<div class="round-score-row"><span>${localized}</span><span>+${y.pts} ${t('pts_label')}</span></div>`;
+      });
+    }
+
+    body += `<div class="round-detail-subtitle">${t('pointBreakdown')}</div>`;
+    body += `<div class="round-score-row"><span>${t('baseYakuPts')}</span><span>${basePts} ${t('pts_label')}</span></div>`;
+    if (didSevenDouble) body += `<div class="round-score-row"><span>${t('sevenDoubled')}</span><span></span></div>`;
+    if (didWinnerKoiDouble) body += `<div class="round-score-row"><span>${t('koiKoiDoubled')}</span><span></span></div>`;
+    if (didOppKoiBonus) body += `<div class="round-score-row"><span>${t('oppKoiBonus')}</span><span></span></div>`;
+    body += `<div class="round-score-row round-score-final"><span>${t('finalRoundPts')}</span><span>+${pts} ${t('pts_label')}</span></div>`;
   }
   body += `<div class="round-score-row" style="margin-top:12px"><span>${playerNames[0]}</span><span>${state.myIndex===0 ? state.myScore : state.oppScore} ${t('pts_label')}</span></div>`;
   body += `<div class="round-score-row"><span>${playerNames[1]}</span><span>${state.myIndex===1 ? state.myScore : state.oppScore} ${t('pts_label')}</span></div>`;
@@ -1221,10 +1632,12 @@ function showGameEnd(state) {
   if (bodyEl) bodyEl.classList.add('hidden');
   if (btn) btn.classList.add('hidden');
   if (box) box.classList.add('awaiting-reveal');
+  gameEndRevealArmedAt = Date.now() + 280;
 
   if (box) {
     box.onclick = (e) => {
       if (e.target && e.target.id === 'btn-play-again') return;
+      if (Date.now() < gameEndRevealArmedAt) return;
       if (!box.classList.contains('awaiting-reveal')) return;
       box.classList.remove('awaiting-reveal');
       if (splashWrap) splashWrap.classList.add('hidden');

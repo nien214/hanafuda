@@ -351,6 +351,21 @@ html, body {
   align-items: center;
   justify-content: center;
 }
+#deck-pile.deck-clickable {
+  cursor: pointer;
+}
+#deck-pile.deck-clickable .deck-layer-1 {
+  box-shadow: 0 0 0 2px rgba(201,168,76,0.55), 0 0 20px rgba(201,168,76,0.35);
+  border-radius: 6px;
+  animation: deck-pulse 1s ease-in-out infinite;
+}
+#deck-pile.deck-disabled {
+  cursor: default;
+}
+@keyframes deck-pulse {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-2px); }
+}
 .deck-stack {
   position: relative;
   width: var(--card-w);
@@ -402,6 +417,20 @@ html, body {
   height: 100%;
   object-fit: cover;
   display: block;
+}
+.flying-card .fly-stack {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+.flying-card .fly-stack img {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.35);
 }
 .flying-card.flip-reveal {
   perspective: 900px;
@@ -764,6 +793,25 @@ html, body {
   color: var(--cream);
 }
 .round-score-row span:last-child { color: var(--gold); font-weight: 700; }
+.round-detail-title {
+  margin: 6px 0 8px;
+  font-size: 18px;
+  color: var(--gold);
+  font-weight: 700;
+}
+.round-detail-subtitle {
+  margin-top: 10px;
+  margin-bottom: 4px;
+  font-size: 13px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: .8px;
+}
+.round-score-row.round-score-final {
+  border-top: 1px solid var(--gold);
+  border-bottom: 1px solid var(--gold);
+  margin-top: 6px;
+}
 .result-winner { font-size: 20px; color: #27ae60; font-weight: 700; margin-bottom: 16px; }
 .result-draw   { font-size: 20px; color: var(--text-dim); margin-bottom: 16px; }
 .overlay-box .btn-primary { margin-top: 20px; width: auto; padding: 12px 36px; }
@@ -831,6 +879,30 @@ html, body {
 @keyframes slide-up {
   from { transform: translateX(-50%) translateY(20px); opacity: 0; }
   to   { transform: translateX(-50%) translateY(0); opacity: 1; }
+}
+
+/* ── Event Toast ───────────────────────────────────────────────────────────── */
+.event-toast {
+  position: fixed;
+  top: 58px;
+  left: 50%;
+  transform: translateX(-50%) translateY(-14px);
+  background: rgba(8, 16, 11, 0.95);
+  border: 1px solid rgba(201,168,76,0.55);
+  color: var(--cream);
+  padding: 8px 14px;
+  border-radius: 10px;
+  font-size: 14px;
+  letter-spacing: .2px;
+  z-index: 1100;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .2s ease, transform .2s ease;
+  box-shadow: 0 10px 24px rgba(0,0,0,0.4);
+}
+.event-toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
 }
 
 /* ── AI Thinking ────────────────────────────────────────────────────────────── */

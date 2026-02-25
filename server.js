@@ -213,7 +213,7 @@ function createGameState(totalRounds) {
       { hand: p1Hand, captured: [], score: 0 },
     ],
     currentPlayer: 1, // non-dealer goes first
-    phase: 'hand-play', // hand-play | capture-choice | koi-koi-decision | round-end | game-end
+    phase: 'hand-play', // hand-play | capture-choice | await-deck-flip | koi-koi-decision | round-end | game-end
     drawnCard: null,
     pendingCard: null,       // card just played from hand or drawn
     pendingMatches: [],      // field card ids player must choose between
@@ -320,9 +320,29 @@ function afterCaptures(gs, room) {
   if (isNew) {
     gs.yakuSnapshot[pi] = newKey;
     gs.lastYaku[pi] = yaku;
+    emitYakuAchieved(room, {
+      playerIndex: pi,
+      yaku,
+      score: totalYakuScore(yaku),
+    });
+    // For solo AI, decide immediately so declaration/end-round cannot be skipped.
+    if (room.isSolo && pi === AI_INDEX) {
+      aiDoKoiKoi(gs, room);
+      return;
+    }
     gs.phase = 'koi-koi-decision';
     broadcastState(room);
   } else {
+    // Terminal condition: if nobody formed a new yaku and all cards are exhausted,
+    // finish as draw.
+    if (
+      gs.players[0].hand.length === 0 &&
+      gs.players[1].hand.length === 0 &&
+      gs.stock.length === 0
+    ) {
+      endRound(gs, room, null, 0);
+      return;
+    }
     endTurn(gs, room);
   }
 }
@@ -349,13 +369,7 @@ function endRound(gs, room, winner, points) {
   let p1Delta = 0;
 
   if (winner !== null) {
-    finalPts = points;
-    // 7+ point doubling
-    if (finalPts >= 7) finalPts *= 2;
-    // koi-koi doubling
-    if (gs.koiKoiCalled[winner]) finalPts *= 2;
-    // opponent called koi-koi bonus
-    if (gs.koiKoiCalled[1 - winner]) finalPts *= 2;
+    finalPts = computeFinalRoundPoints(gs, winner, points);
     gs.players[winner].score += finalPts;
     gs.roundPoints = finalPts;
     if (winner === 0) p0Delta = finalPts;
@@ -389,6 +403,35 @@ function endRound(gs, room, winner, points) {
   broadcastState(room);
 }
 
+function shouldManualDeckFlip(gs, room) {
+  const current = room.players[gs.currentPlayer];
+  if (!current || !current.socketId) return false;
+  // In solo mode, only human (index 0) flips manually.
+  if (room.isSolo && gs.currentPlayer === AI_INDEX) return false;
+  return true;
+}
+
+function beginDeckPhase(gs, room) {
+  if (gs.stock.length === 0) {
+    gs.drawnCard = null;
+    gs.pendingCard = null;
+    gs.pendingMatches = [];
+    gs.pendingPhase = null;
+    afterCaptures(gs, room);
+    return;
+  }
+  if (shouldManualDeckFlip(gs, room)) {
+    gs.phase = 'await-deck-flip';
+    gs.drawnCard = null;
+    gs.pendingCard = null;
+    gs.pendingMatches = [];
+    gs.pendingPhase = null;
+    broadcastState(room);
+    return;
+  }
+  doDeckDraw(gs, room);
+}
+
 // ─── Deck Draw ────────────────────────────────────────────────────────────────
 function doDeckDraw(gs, room) {
   if (gs.stock.length === 0) {
@@ -398,9 +441,10 @@ function doDeckDraw(gs, room) {
   const drawn = gs.stock.shift();
   gs.drawnCard = drawn;
 
-  // Notify human player for deck-flip animation (non-blocking)
-  const humanSocket = room.players[0] && room.players[0].socketId;
-  if (humanSocket) io.to(humanSocket).emit('deck-draw', { card: drawn });
+  // Notify all connected players for deck-flip animation (non-blocking)
+  room.players.forEach(p => {
+    if (p && p.socketId) io.to(p.socketId).emit('deck-draw', { card: drawn });
+  });
 
   const matches = getMatches(drawn, gs.field);
 
@@ -494,13 +538,13 @@ io.on('connection', socket => {
 
     if (matches.length === 0) {
       processNoMatch(gs, card);
-      doDeckDraw(gs, room);
+      beginDeckPhase(gs, room);
     } else if (matches.length === 1) {
       processCapture(gs, card, matches[0]);
-      doDeckDraw(gs, room);
+      beginDeckPhase(gs, room);
     } else if (matches.length === 3) {
       captureAll(gs, card, matches);
-      doDeckDraw(gs, room);
+      beginDeckPhase(gs, room);
     } else {
       // 2 matches — need choice
       gs.pendingCard = card;
@@ -530,10 +574,19 @@ io.on('connection', socket => {
     gs.phase = 'hand-play'; // reset temporarily
 
     if (wasHand) {
-      doDeckDraw(gs, room);
+      beginDeckPhase(gs, room);
     } else {
       afterCaptures(gs, room);
     }
+  });
+
+  socket.on('flip-deck', () => {
+    const room = getRoomForSocket(socket.id);
+    if (!room || !room.gs) return;
+    const gs = room.gs;
+    const pi = getPlayerIndex(room, socket.id);
+    if (pi !== gs.currentPlayer || gs.phase !== 'await-deck-flip') return;
+    doDeckDraw(gs, room);
   });
 
   socket.on('koi-koi-choice', ({ choice }) => {
@@ -545,8 +598,15 @@ io.on('connection', socket => {
 
     if (choice === 'shobu') {
       const pts = totalYakuScore(gs.lastYaku[pi]);
+      const finalPts = computeFinalRoundPoints(gs, pi, pts);
+      emitKoiKoiDeclared(room, { playerIndex: pi, choice: 'shobu', score: finalPts, baseScore: pts });
       endRound(gs, room, pi, pts);
     } else {
+      emitKoiKoiDeclared(room, {
+        playerIndex: pi,
+        choice: 'koi-koi',
+        score: totalYakuScore(gs.lastYaku[pi])
+      });
       gs.koiKoiCalled[pi] = true;
       endTurn(gs, room);
     }
@@ -617,6 +677,44 @@ function getRoomForSocket(socketId) {
 function getPlayerIndex(room, socketId) {
   const p = room.players.find(p => p.socketId === socketId);
   return p ? p.index : -1;
+}
+
+function emitYakuAchieved(room, payload) {
+  room.players.forEach((p) => {
+    if (!p || !p.socketId) return;
+    io.to(p.socketId).emit('yaku-achieved', payload);
+  });
+}
+
+function emitKoiKoiDeclared(room, payload) {
+  room.players.forEach((p) => {
+    if (!p || !p.socketId) return;
+    io.to(p.socketId).emit('koi-koi-declared', payload);
+  });
+}
+
+function computeFinalRoundPoints(gs, winner, basePoints) {
+  let finalPts = Number(basePoints) || 0;
+  // 7+ point doubling
+  if (finalPts >= 7) finalPts *= 2;
+  // winner called koi-koi
+  if (gs.koiKoiCalled[winner]) finalPts *= 2;
+  // opponent called koi-koi bonus
+  if (gs.koiKoiCalled[1 - winner]) {
+    finalPts *= 2;
+    // Safety: opponent Koi-Koi must guarantee at least base x2 for winner.
+    const minWithOppKoi = (Number(basePoints) || 0) * 2;
+    if (finalPts < minWithOppKoi) finalPts = minWithOppKoi;
+  }
+  return finalPts;
+}
+
+function emitAiDecision(room, payload) {
+  room.players.forEach((p, idx) => {
+    if (!p || !p.socketId) return;
+    if (idx === AI_INDEX) return;
+    io.to(p.socketId).emit('ai-koi-koi-decision', payload);
+  });
 }
 
 // ─── AI Engine ───────────────────────────────────────────────────────────────
@@ -714,13 +812,13 @@ function aiPlayHand(gs, room) {
   const matches = getMatches(card, gs.field);
   if (matches.length === 0) {
     processNoMatch(gs, card);
-    doDeckDraw(gs, room);
+    beginDeckPhase(gs, room);
   } else if (matches.length === 1) {
     processCapture(gs, card, matches[0]);
-    doDeckDraw(gs, room);
+    beginDeckPhase(gs, room);
   } else if (matches.length === 3) {
     captureAll(gs, card, matches);
-    doDeckDraw(gs, room);
+    beginDeckPhase(gs, room);
   } else {
     // 2 matches — capture-choice phase; scheduleAiMove will re-fire
     gs.pendingCard    = card;
@@ -741,7 +839,7 @@ function aiSelectCapture(gs, room) {
   gs.pendingPhase   = null;
   gs.phase = 'hand-play';
 
-  if (wasHand) doDeckDraw(gs, room);
+  if (wasHand) beginDeckPhase(gs, room);
   else          afterCaptures(gs, room);
 }
 
@@ -775,8 +873,18 @@ function aiDoKoiKoi(gs, room) {
   }
 
   if (takePts) {
+    const finalPts = computeFinalRoundPoints(gs, AI_INDEX, score);
+    emitKoiKoiDeclared(room, {
+      playerIndex: AI_INDEX,
+      choice: 'shobu',
+      score: finalPts,
+      baseScore: score
+    });
+    emitAiDecision(room, { choice: 'shobu', score });
     endRound(gs, room, AI_INDEX, score);
   } else {
+    emitKoiKoiDeclared(room, { playerIndex: AI_INDEX, choice: 'koi-koi', score });
+    emitAiDecision(room, { choice: 'koi-koi', score });
     gs.koiKoiCalled[AI_INDEX] = true;
     endTurn(gs, room);
   }
