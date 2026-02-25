@@ -1045,6 +1045,7 @@ html, body {
   scroll-snap-type: x mandatory;
   -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
+  touch-action: pan-x;
 }
 #screen-game.mobile-portrait #game-stage-scroll::-webkit-scrollbar {
   display: none;
@@ -1078,6 +1079,10 @@ html, body {
 #screen-game.mobile-portrait #field-deck-row {
   gap: clamp(8px, 2.8vw, 14px);
 }
+#screen-game.mobile-portrait .field-area,
+#screen-game.mobile-portrait .field-area .card.field-card {
+  touch-action: manipulation;
+}
 #screen-game.mobile-portrait .field-area {
   gap: clamp(4px, 1vw, 8px);
   padding: clamp(6px, 1.5vw, 10px);
@@ -1085,14 +1090,14 @@ html, body {
   min-height: auto;
 }
 #screen-game.mobile-portrait .hand-area {
-  gap: 2px;
+  gap: clamp(1px, 0.35vw, 3px);
   min-height: calc(var(--hand-card-w) * 1.39 + 2px);
 }
 #screen-game.mobile-portrait #player-hand,
 #screen-game.mobile-portrait #opp-hand {
   width: 100%;
   flex-wrap: nowrap;
-  justify-content: space-between;
+  justify-content: center;
   align-items: center;
 }
 #screen-game.mobile-portrait #player-hand .card,

@@ -596,6 +596,16 @@ function renderField(s, capturedIds = new Set()) {
       div.classList.remove('field-enter');  // fly animation is the visual cue
       div.classList.add('pending-field-hidden');
     }
+    // Keep capture-choice highlighting stable even when renderField is called by
+    // delayed animation flushes between state updates.
+    if (
+      s.phase === 'capture-choice' &&
+      s.currentPlayer === myIndex &&
+      Array.isArray(s.pendingMatches) &&
+      s.pendingMatches.includes(card.id)
+    ) {
+      div.classList.add('capture-target');
+    }
 
     div.ondragover = e => e.preventDefault();
     div.ondrop = e => {
@@ -603,6 +613,10 @@ function renderField(s, capturedIds = new Set()) {
       onDropOnCard(card.id);
     };
     div.onclick = () => onFieldCardClick(card.id);
+    div.ontouchend = (e) => {
+      e.preventDefault();
+      onFieldCardClick(card.id);
+    };
     el.appendChild(div);
     fieldCardLastRects.set(card.id, div.getBoundingClientRect());
   });
