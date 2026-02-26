@@ -220,6 +220,25 @@ function clearSoloStartAckTimer() {
   soloStartAckTimer = null;
 }
 
+function resetPendingLocalPlayState({ restoreVisibility = true } = {}) {
+  pendingLocalPlayCardId = null;
+  pendingLocalPlayFromRect = null;
+  pendingLocalPlayImageSrc = null;
+  clearPendingHandPlayAck();
+  if (restoreVisibility) {
+    document.querySelectorAll('#player-hand .card').forEach(el => {
+      el.style.visibility = '';
+    });
+  }
+}
+
+function resolveStalePendingLocalPlay() {
+  // If we are locked but no ack timer is active, this lock is stale.
+  if (pendingLocalPlayCardId !== null && !pendingHandPlayAckTimer) {
+    resetPendingLocalPlayState();
+  }
+}
+
 function updateAssetLoadingProgress(loaded, total, failed = 0) {
   assetLoadStats = {
     loaded: Math.max(0, loaded || 0),
@@ -1084,9 +1103,7 @@ function queueStateAnimations(prev, next) {
   if (!prev || myIndex === null) return;
   if (prev.roundNumber !== next.roundNumber) {
     pendingDeckDrawCard = null;
-    pendingLocalPlayCardId = null;
-    pendingLocalPlayFromRect = null;
-    pendingLocalPlayImageSrc = null;
+    resetPendingLocalPlayState();
     pendingChoiceCardId = null;
     pendingChoiceImageSrc = null;
     pendingChoiceOnField = null;
@@ -1284,6 +1301,11 @@ function queueStateAnimations(prev, next) {
       pendingLocalPlayFromRect = null;
       pendingLocalPlayImageSrc = null;
     } else {
+      if (pendingLocalPlayCardId !== null) {
+        // A different card was consumed than the local pending one.
+        // Drop stale lock so the hand cannot get permanently blocked.
+        resetPendingLocalPlayState();
+      }
       const srcEl = document.querySelector(`#player-hand .card[data-card-id="${removed.id}"]`);
       if (nextMyCaptureIds.has(removed.id)) {
         const desiredFieldCount = desiredFieldCountForMonth(removed.month);
@@ -1314,9 +1336,7 @@ function queueStateAnimations(prev, next) {
       }
     }
   } else if (pendingLocalPlayCardId !== null) {
-    pendingLocalPlayCardId = null;
-    pendingLocalPlayFromRect = null;
-    pendingLocalPlayImageSrc = null;
+    resetPendingLocalPlayState();
   }
 
   // Resolve "capture-choice" hand card capture before any deck-draw animation.
@@ -1878,6 +1898,7 @@ function onDeckPileClick() {
 
 /* ── Drag & Drop ─────────────────────────────────────────────────────────────── */
 function onDragStart(e, cardId) {
+  resolveStalePendingLocalPlay();
   if (pendingLocalPlayCardId !== null) {
     e.preventDefault();
     return;
@@ -1908,6 +1929,7 @@ function onDragEnd(e) {
 }
 
 function onDropOnCard(fieldCardId) {
+  resolveStalePendingLocalPlay();
   if (draggedCardId === null) return;
   if (pendingLocalPlayCardId !== null) return;
   clearHighlights();
@@ -1917,6 +1939,7 @@ function onDropOnCard(fieldCardId) {
 }
 
 function onDropToField(e) {
+  resolveStalePendingLocalPlay();
   if (draggedCardId === null) return;
   if (pendingLocalPlayCardId !== null) return;
   clearHighlights();
@@ -1932,6 +1955,7 @@ function clearHighlights() {
 
 /* ── Click interactions ──────────────────────────────────────────────────────── */
 function onHandCardClick(cardId) {
+  resolveStalePendingLocalPlay();
   if (!gameState) return;
   if (gameState.currentPlayer !== myIndex || gameState.phase !== 'hand-play') return;
   if (pendingLocalPlayCardId !== null) return;
@@ -1951,10 +1975,7 @@ function animateHandPlay(cardId, cb, targetFieldCardId = null) {
     startPendingHandPlayAck();
     cb(); // emit immediately so the fly starts as soon as the server responds
   } else {
-    pendingLocalPlayCardId = null;
-    pendingLocalPlayFromRect = null;
-    pendingLocalPlayImageSrc = null;
-    clearPendingHandPlayAck();
+    resetPendingLocalPlayState({ restoreVisibility: false });
     cb();
   }
 }
@@ -1964,12 +1985,7 @@ function startPendingHandPlayAck() {
   // Recovery: if server ack/state is delayed or dropped, restore hidden cards.
   pendingHandPlayAckTimer = setTimeout(() => {
     pendingHandPlayAckTimer = null;
-    pendingLocalPlayCardId = null;
-    pendingLocalPlayFromRect = null;
-    pendingLocalPlayImageSrc = null;
-    document.querySelectorAll('#player-hand .card').forEach(el => {
-      el.style.visibility = '';
-    });
+    resetPendingLocalPlayState();
   }, 3000);
 }
 
