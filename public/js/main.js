@@ -646,8 +646,10 @@ function renderField(s, capturedIds = new Set()) {
   const el = $('field');
   const newFieldIds = new Set(s.field.filter(c => !capturedIds.has(c.id)).map(c => c.id));
   const now = Date.now();
+  const pendingChoiceId = pendingChoiceOnField ? pendingChoiceOnField.id : null;
   for (const [id, ts] of pendingFieldRevealAt.entries()) {
-    if (ts <= now || !newFieldIds.has(id)) pendingFieldRevealAt.delete(id);
+    // Keep reveal timers for the temporary played card shown during capture-choice.
+    if (ts <= now || (!newFieldIds.has(id) && id !== pendingChoiceId)) pendingFieldRevealAt.delete(id);
   }
   for (const [id, carry] of pendingFieldCarryAt.entries()) {
     if (!carry || carry.hideAt <= now) pendingFieldCarryAt.delete(id);
