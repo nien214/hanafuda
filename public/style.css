@@ -156,6 +156,22 @@ html, body {
   gap: 14px;
   width: 260px;
 }
+.lobby-conn-status {
+  min-height: 18px;
+  font-size: 13px;
+  color: var(--text-dim);
+  letter-spacing: 0.3px;
+  text-align: center;
+}
+.lobby-conn-status.connected {
+  color: #73d28f;
+}
+.lobby-conn-status.warning {
+  color: #f0c57a;
+}
+.lobby-conn-status.error {
+  color: var(--red-light);
+}
 
 /* ── Buttons ────────────────────────────────────────────────────────────────── */
 .btn-primary {

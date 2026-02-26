@@ -43,6 +43,10 @@ window.I18N = {
     errorRoomFull:   'Room is full',
     errorNotFound:   'Room not found',
     errorStarted:    'Game already started',
+    serverConnecting:'Connecting to game server…',
+    serverConnected: 'Game server connected',
+    serverDisconnected:'Disconnected from server. Reconnecting…',
+    serverConnectionError:'Cannot reach game server. Retrying…',
     koiKoiDoubled:   '× 2 (Koi-Koi)',
     sevenDoubled:    '× 2 (7+ pts)',
     oppKoiBonus:     '× 2 (Opp. called Koi-Koi)',
@@ -176,6 +180,10 @@ window.I18N = {
     errorRoomFull:   '部屋が満員です',
     errorNotFound:   '部屋が見つかりません',
     errorStarted:    'ゲームはすでに開始されています',
+    serverConnecting:'ゲームサーバーに接続中…',
+    serverConnected: 'ゲームサーバー接続済み',
+    serverDisconnected:'サーバーとの接続が切れました。再接続中…',
+    serverConnectionError:'ゲームサーバーに接続できません。再試行中…',
     koiKoiDoubled:   '× 2 (こいこい)',
     sevenDoubled:    '× 2 (7点以上)',
     oppKoiBonus:     '× 2 (相手がこいこい)',
@@ -274,6 +282,9 @@ function setLang(lang) {
   updateRulesContent();
   if (typeof window.refreshAssetLoadingI18n === 'function') {
     window.refreshAssetLoadingI18n();
+  }
+  if (typeof window.refreshLobbyConnectionStatusI18n === 'function') {
+    window.refreshLobbyConnectionStatusI18n();
   }
   if (window.gameState) renderAll();
 }

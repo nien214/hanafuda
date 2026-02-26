@@ -41,6 +41,7 @@
       <button class="btn-computer" id="btn-solo"  data-i18n="playComputer">Play with Computer</button>
       <button class="btn-outline" id="btn-rules"  data-i18n="gameRules">Game Rules</button>
     </div>
+    <p id="lobby-conn-status" class="lobby-conn-status"></p>
   </div>
 </div>
 
@@ -64,6 +65,7 @@
       <div id="create-code" class="room-code">----</div>
       <p class="waiting-text" data-i18n="waitingOpponent">Waiting for opponent…</p>
     </div>
+    <p id="create-error" class="error-text hidden"></p>
 
     <div class="modal-actions">
       <button class="btn-primary" id="btn-create-confirm" data-i18n="create">Create</button>
@@ -111,6 +113,7 @@
       <button class="likert-btn active" data-value="medium" data-i18n="diffMedium">Medium</button>
       <button class="likert-btn" data-value="hard"   data-i18n="diffHard">Hard</button>
     </div>
+    <p id="solo-error" class="error-text hidden"></p>
 
     <div class="modal-actions">
       <button class="btn-computer" id="btn-solo-confirm" data-i18n="startGame">Start Game</button>

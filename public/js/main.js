@@ -1,9 +1,16 @@
 /* ── Socket & State ───────────────────────────────────────────────────────────── */
 const RENDER_SOCKET_URL = 'https://hanafuda-kz9x.onrender.com';
 const isLocalHost = /^(localhost|127\.0\.0\.1)$/.test(window.location.hostname);
+const SOCKET_OPTIONS = {
+  reconnection: true,
+  reconnectionAttempts: Infinity,
+  reconnectionDelay: 700,
+  reconnectionDelayMax: 3000,
+  timeout: 20000,
+};
 const socket = isLocalHost
-  ? io()
-  : io(RENDER_SOCKET_URL, { transports: ['websocket', 'polling'] });
+  ? io(undefined, SOCKET_OPTIONS)
+  : io(RENDER_SOCKET_URL, SOCKET_OPTIONS);
 let gameState   = null;
 let myIndex     = null;   // 0 or 1
 let playerNames = { 0: 'Player 1', 1: 'Player 2' };
@@ -45,6 +52,9 @@ let eventToastTimer = null;
 let assetPreloadPromise = null;
 let assetLoadStats = { loaded: 0, total: 0, failed: 0 };
 let mobileStageCentered = false;
+let lobbyConnectionState = 'connecting';
+let createRoomAckTimer = null;
+let soloStartAckTimer = null;
 
 const CARD_IMAGE_FILES = [
   '01_Pine Chaff 1.png',
@@ -161,6 +171,55 @@ function wait(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function setLobbyConnectionState(state) {
+  lobbyConnectionState = state;
+  const el = $('lobby-conn-status');
+  if (!el) return;
+  el.classList.remove('connected', 'warning', 'error');
+
+  let key = 'serverConnecting';
+  if (state === 'connected') {
+    key = 'serverConnected';
+    el.classList.add('connected');
+  } else if (state === 'disconnected') {
+    key = 'serverDisconnected';
+    el.classList.add('warning');
+  } else if (state === 'error') {
+    key = 'serverConnectionError';
+    el.classList.add('error');
+  } else {
+    el.classList.add('warning');
+  }
+  el.textContent = t(key);
+}
+
+window.refreshLobbyConnectionStatusI18n = () => {
+  setLobbyConnectionState(lobbyConnectionState);
+};
+
+function ensureSocketReady(errorId = null) {
+  if (socket.connected) return true;
+  setLobbyConnectionState('connecting');
+  if (errorId) {
+    show(errorId);
+    $(errorId).textContent = t('serverConnecting');
+  }
+  socket.connect();
+  return false;
+}
+
+function clearCreateRoomAckTimer() {
+  if (!createRoomAckTimer) return;
+  clearTimeout(createRoomAckTimer);
+  createRoomAckTimer = null;
+}
+
+function clearSoloStartAckTimer() {
+  if (!soloStartAckTimer) return;
+  clearTimeout(soloStartAckTimer);
+  soloStartAckTimer = null;
+}
+
 function updateAssetLoadingProgress(loaded, total, failed = 0) {
   assetLoadStats = {
     loaded: Math.max(0, loaded || 0),
@@ -251,13 +310,22 @@ function ensureAssetPreloadStarted() {
 /* ── Lobby bindings ──────────────────────────────────────────────────────────── */
 $('btn-solo').onclick = () => {
   show('modal-solo');
+  hide('solo-error');
+  $('btn-solo-confirm').disabled = false;
   $('solo-name').value = '';
 };
-$('btn-solo-cancel').onclick = () => hide('modal-solo');
 $('btn-solo-confirm').onclick = () => {
+  if (!ensureSocketReady('solo-error')) return;
   const name = $('solo-name').value.trim() || 'Player';
+  hide('solo-error');
   isSoloMode = true;
-  hide('modal-solo');
+  $('btn-solo-confirm').disabled = true;
+  clearSoloStartAckTimer();
+  soloStartAckTimer = setTimeout(() => {
+    $('btn-solo-confirm').disabled = false;
+    show('solo-error');
+    $('solo-error').textContent = t('serverConnectionError');
+  }, 12000);
   socket.emit('start-solo', { name, rounds: selectedRoundsSolo, difficulty: selectedDifficulty });
 };
 
@@ -282,6 +350,8 @@ document.querySelectorAll('#difficulty-likert .likert-btn').forEach(btn => {
 $('btn-create').onclick = () => {
   show('modal-create');
   hide('create-code-area');
+  hide('create-error');
+  $('btn-create-confirm').disabled = false;
   $('create-name').value = '';
 };
 $('btn-join').onclick = () => {
@@ -295,24 +365,41 @@ $('btn-rules').onclick = () => {
   show('modal-rules');
 };
 
-$('btn-create-cancel').onclick = () => hide('modal-create');
+$('btn-create-cancel').onclick = () => {
+  clearCreateRoomAckTimer();
+  $('btn-create-confirm').disabled = false;
+  hide('modal-create');
+};
 $('btn-join-cancel').onclick   = () => hide('modal-join');
-$('btn-rules-close').onclick   = () => hide('modal-rules');
+$('btn-solo-cancel').onclick = () => {
+  clearSoloStartAckTimer();
+  $('btn-solo-confirm').disabled = false;
+  hide('modal-solo');
+};
+$('btn-rules-close').onclick = () => hide('modal-rules');
 
 // Rounds likert
-document.querySelectorAll('.likert-btn').forEach(btn => {
+document.querySelectorAll('#rounds-likert .likert-btn').forEach(btn => {
   btn.onclick = () => {
-    document.querySelectorAll('.likert-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('#rounds-likert .likert-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     selectedRounds = parseInt(btn.dataset.value);
   };
 });
 
 $('btn-create-confirm').onclick = () => {
+  if (!ensureSocketReady('create-error')) return;
   const name = $('create-name').value.trim() || 'Player';
+  hide('create-error');
   socket.emit('create-room', { name, rounds: selectedRounds });
   show('create-code-area');
   $('btn-create-confirm').disabled = true;
+  clearCreateRoomAckTimer();
+  createRoomAckTimer = setTimeout(() => {
+    $('btn-create-confirm').disabled = false;
+    show('create-error');
+    $('create-error').textContent = t('serverConnectionError');
+  }, 12000);
 };
 
 $('btn-join-confirm').onclick = () => {
@@ -323,6 +410,7 @@ $('btn-join-confirm').onclick = () => {
     $('join-error').textContent = 'Please enter a 4-digit code';
     return;
   }
+  if (!ensureSocketReady('join-error')) return;
   hide('join-error');
   socket.emit('join-room', { name, code });
 };
@@ -343,7 +431,20 @@ $('btn-koikoi').onclick = () => socket.emit('koi-koi-choice', { choice: 'koi-koi
 $('deck-pile').onclick = () => onDeckPileClick();
 
 /* ── Socket events ───────────────────────────────────────────────────────────── */
+socket.on('connect', () => {
+  setLobbyConnectionState('connected');
+});
+
+socket.on('disconnect', () => {
+  setLobbyConnectionState('disconnected');
+});
+
+socket.on('connect_error', () => {
+  setLobbyConnectionState('error');
+});
+
 socket.on('room-created', ({ code }) => {
+  clearCreateRoomAckTimer();
   $('create-code').textContent = code;
 });
 
@@ -358,9 +459,15 @@ socket.on('join-error', ({ msg }) => {
 });
 
 socket.on('players-ready', ({ p0Name, p1Name }) => {
+  clearCreateRoomAckTimer();
+  clearSoloStartAckTimer();
+  $('btn-create-confirm').disabled = false;
+  $('btn-solo-confirm').disabled = false;
   playerNames[0] = p0Name;
   // Use localised AI name if solo
   playerNames[1] = (p1Name === 'Computer') ? t('aiName') : p1Name;
+  hide('create-error');
+  hide('solo-error');
   hide('modal-create');
   hide('modal-join');
   hide('modal-solo');
@@ -2072,6 +2179,7 @@ function showDeckReveal(card) {
 /* ── Init ────────────────────────────────────────────────────────────────────── */
 applyTranslations();
 updateRulesContent();
+setLobbyConnectionState(socket.connected ? 'connected' : 'connecting');
 ensureAssetPreloadStarted();
 syncMobilePortraitLayout();
 
